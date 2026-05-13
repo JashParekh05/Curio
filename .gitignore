@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+dist/
+.env
+
+# Node
+node_modules/
+.next/
+out/
+*.env.local
+
+# Scrapy
+backend/scrapy_spiders/output/
+backend/scrapy_spiders/.scrapy/
+
+# Misc
+.DS_Store
+*.mp4
+*.wav
+*.mp3
+tmp/

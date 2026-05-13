@@ -1,0 +1,11 @@
+BOT_NAME = "learnreel"
+SPIDER_MODULES = ["spiders"]
+ROBOTSTXT_OBEY = True
+DOWNLOAD_DELAY = 1.5
+AUTOTHROTTLE_ENABLED = True
+AUTOTHROTTLE_TARGET_CONCURRENCY = 2.0
+HTTPCACHE_ENABLED = True
+HTTPCACHE_EXPIRATION_SECS = 86400  # 24h cache
+FEEDS = {
+    "output/%(name)s_%(time)s.json": {"format": "json"},
+}
