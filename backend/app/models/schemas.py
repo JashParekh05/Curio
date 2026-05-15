@@ -15,6 +15,8 @@ class LearningPath(BaseModel):
     user_query: str
     topics: list[Topic]
     summary: str
+    familiarity_prompt: str | None = None
+    suggested_start_index: int = 0
 
 
 class Clip(BaseModel):
@@ -30,6 +32,10 @@ class Clip(BaseModel):
     source_platform: str | None
     hook_score: float = 0.5
     created_at: str | None = None
+
+
+class InterestsPayload(BaseModel):
+    interests: list[str]
 
 
 class ClipEvent(BaseModel):

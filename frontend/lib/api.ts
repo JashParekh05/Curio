@@ -13,6 +13,8 @@ export interface LearningPath {
   user_query: string;
   topics: Topic[];
   summary: string;
+  familiarity_prompt: string | null;
+  suggested_start_index: number;
 }
 
 export interface Clip {
@@ -89,6 +91,32 @@ export interface TopicRecommendation {
 
 export async function getRecommendations(sessionId: string): Promise<TopicRecommendation[]> {
   const res = await fetch(`${API_BASE}/api/feed/recommendations/${sessionId}`);
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export interface UserProfile {
+  user_id: string;
+  interests: string[];
+  onboarding_complete: boolean;
+}
+
+export async function getUserProfile(userId: string): Promise<UserProfile> {
+  const res = await fetch(`${API_BASE}/api/users/${encodeURIComponent(userId)}/profile`);
+  if (!res.ok) return { user_id: userId, interests: [], onboarding_complete: false };
+  return res.json();
+}
+
+export async function setUserInterests(userId: string, interests: string[]): Promise<void> {
+  await fetch(`${API_BASE}/api/users/${encodeURIComponent(userId)}/interests`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ interests }),
+  });
+}
+
+export async function getDiscoverFeed(userId: string): Promise<Clip[]> {
+  const res = await fetch(`${API_BASE}/api/feed/discover/${encodeURIComponent(userId)}`);
   if (!res.ok) return [];
   return res.json();
 }

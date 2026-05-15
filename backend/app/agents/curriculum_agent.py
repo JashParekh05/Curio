@@ -21,6 +21,7 @@ class CurriculumState(TypedDict):
     raw_path: dict                # LLM output before validation
     learning_path: LearningPath | None
     errors: Annotated[list[str], operator.add]
+    suggested_start_index: int
 
 
 def _groq():
@@ -65,6 +66,20 @@ Return JSON:
         intent = {"goal": state["query"], "level": "beginner", "domain": "general", "specific_concepts": []}
     logger.info(f"[curriculum_agent] intent: {intent}")
     return {"intent": intent}
+
+
+def _build_familiarity_prompt(intent: dict, topics: list[Topic]) -> str | None:
+    level = intent.get("level", "beginner")
+    if level == "beginner" or len(topics) <= 1:
+        return None
+    idx = 1 if level == "intermediate" else min(2, len(topics) - 1)
+    return f"You seem familiar with the basics. Want to start at \"{topics[idx].name}\"?"
+
+
+def _node_assess_familiarity(state: CurriculumState) -> dict:
+    level = state["intent"].get("level", "beginner")
+    index_map = {"beginner": 0, "intermediate": 1, "advanced": 2}
+    return {"suggested_start_index": index_map.get(level, 0)}
 
 
 def _node_load_curated(state: CurriculumState) -> dict:
@@ -158,6 +173,8 @@ def _node_validate_path(state: CurriculumState) -> dict:
             user_query=state["query"],
             topics=topics,
             summary=data.get("summary", ""),
+            familiarity_prompt=_build_familiarity_prompt(state["intent"], topics),
+            suggested_start_index=state.get("suggested_start_index", 0),
         )
         logger.info(f"[curriculum_agent] path validated: {len(topics)} topics")
         return {"learning_path": path}
@@ -168,11 +185,13 @@ def _node_validate_path(state: CurriculumState) -> dict:
 def build_curriculum_graph() -> StateGraph:
     g = StateGraph(CurriculumState)
     g.add_node("understand_intent", _node_understand_intent)
+    g.add_node("assess_familiarity", _node_assess_familiarity)
     g.add_node("load_curated", _node_load_curated)
     g.add_node("build_curriculum", _node_build_curriculum)
     g.add_node("validate_path", _node_validate_path)
     g.set_entry_point("understand_intent")
-    g.add_edge("understand_intent", "load_curated")
+    g.add_edge("understand_intent", "assess_familiarity")
+    g.add_edge("assess_familiarity", "load_curated")
     g.add_edge("load_curated", "build_curriculum")
     g.add_edge("build_curriculum", "validate_path")
     g.add_edge("validate_path", END)
@@ -197,6 +216,7 @@ def run_curriculum(query: str, session_id: str | None = None) -> LearningPath:
         "raw_path": {},
         "learning_path": None,
         "errors": [],
+        "suggested_start_index": 0,
     })
 
     if result["learning_path"] is None:

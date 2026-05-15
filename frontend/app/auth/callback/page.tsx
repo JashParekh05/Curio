@@ -3,15 +3,20 @@
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import { getUserProfile } from "@/lib/api";
 
 export default function AuthCallback() {
   const router = useRouter();
 
   useEffect(() => {
-    // Supabase exchanges the token from the URL hash automatically on init.
-    // Wait for session to settle, then redirect home.
-    supabase.auth.getSession().then(() => {
-      router.replace("/");
+    supabase.auth.getSession().then(async ({ data }) => {
+      const userId = data.session?.user?.id;
+      if (!userId) {
+        router.replace("/");
+        return;
+      }
+      const profile = await getUserProfile(userId);
+      router.replace(profile.onboarding_complete ? "/" : "/onboarding");
     });
   }, [router]);
 

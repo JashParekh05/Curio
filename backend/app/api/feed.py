@@ -1,5 +1,6 @@
 import math
 import re
+import random
 import logging
 import asyncio
 from datetime import datetime, timezone
@@ -330,6 +331,74 @@ async def get_feed(
     clips = _compute_scores(clips, pop_stats, None)
     clips = sorted(clips, key=lambda c: c.hook_score, reverse=True)
     return FeedResponse(topic_slug=topic_slug, clips=clips, processing=len(clips) == 0)
+
+
+def _match_interest_slugs(interests: list[str], all_slugs: list[str]) -> list[str]:
+    """Return topic slugs that overlap with any user interest keyword."""
+    if not interests:
+        return all_slugs[:10]
+    keywords = set()
+    for tag in interests:
+        keywords.update(re.findall(r'\b[a-z]{3,}\b', tag.lower()))
+    matched = [s for s in all_slugs if any(kw in s for kw in keywords)]
+    return matched or all_slugs[:10]
+
+
+def _fetch_discover_clips(
+    db,
+    relevant_slugs: list[str],
+    all_slugs: list[str],
+    seen_ids: set[str],
+    limit: int,
+) -> list[Clip]:
+    relevant_limit = int(limit * 0.6)
+    diversity_limit = limit - relevant_limit
+
+    clips: list[Clip] = []
+
+    # Relevant clips first
+    for slug in relevant_slugs[:5]:
+        result = db.table("clips").select("*").eq("topic_slug", slug).limit(6).execute()
+        for row in result.data:
+            if row["id"] not in seen_ids and len(clips) < relevant_limit:
+                row.setdefault("hook_score", 0.5)
+                clips.append(Clip(**row))
+
+    # Diversity fill from other slugs
+    other_slugs = [s for s in all_slugs if s not in relevant_slugs]
+    random.shuffle(other_slugs)
+    for slug in other_slugs[:8]:
+        result = db.table("clips").select("*").eq("topic_slug", slug).limit(3).execute()
+        for row in result.data:
+            if row["id"] not in seen_ids and len(clips) < limit:
+                row.setdefault("hook_score", 0.5)
+                clips.append(Clip(**row))
+
+    clip_ids = [c.id for c in clips]
+    pop_stats = _get_clip_population_stats(db, clip_ids)
+    clips = _compute_scores(clips, pop_stats, None)
+    random.shuffle(clips)  # mix rather than pure score sort for serendipity
+    return clips[:limit]
+
+
+@router.get("/discover/{user_id}", response_model=list[Clip])
+async def get_discover_feed(user_id: str, limit: int = Query(20, le=50)):
+    db = get_client()
+
+    profile = db.table("user_profiles").select("interests").eq("user_id", user_id).limit(1).execute()
+    interests: list[str] = profile.data[0]["interests"] if profile.data else []
+
+    paths = db.table("learning_paths").select("session_id").eq("user_id", user_id).execute()
+    seen_ids: set[str] = set()
+    for p in paths.data:
+        events = db.table("clip_events").select("clip_id").eq("session_id", p["session_id"]).execute()
+        seen_ids.update(e["clip_id"] for e in events.data)
+
+    all_topics = db.table("topics").select("slug").execute()
+    all_slugs = [t["slug"] for t in all_topics.data]
+    relevant_slugs = _match_interest_slugs(interests, all_slugs)
+
+    return _fetch_discover_clips(db, relevant_slugs, all_slugs, seen_ids, limit)
 
 
 @router.post("/{clip_id}/events", status_code=204)

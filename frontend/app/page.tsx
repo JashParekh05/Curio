@@ -65,6 +65,19 @@ export default function Home() {
           </button>
         </div>
 
+        {/* Mode tabs */}
+        <div className="flex gap-3">
+          <button
+            onClick={() => router.push("/discover")}
+            className="flex-1 bg-zinc-900 border border-zinc-800 text-zinc-300 hover:text-white hover:border-zinc-600 font-medium py-3 rounded-xl text-sm transition"
+          >
+            Discover
+          </button>
+          <div className="flex-1 bg-white text-black font-semibold py-3 rounded-xl text-sm text-center cursor-default">
+            Learn
+          </div>
+        </div>
+
         {!path ? (
           <>
             <div className="space-y-2">
@@ -101,7 +114,6 @@ export default function Home() {
               ))}
             </div>
 
-            {/* Past learning paths */}
             {history.length > 0 && (
               <div className="space-y-3">
                 <p className="text-zinc-500 text-sm">Continue where you left off:</p>
@@ -139,12 +151,34 @@ export default function Home() {
               </div>
             </div>
 
-            <button
-              onClick={() => router.push(`/feed?session=${path.session_id}`)}
-              className="w-full bg-white text-black font-semibold py-4 rounded-xl text-lg hover:bg-zinc-100 transition"
-            >
-              Start Watching →
-            </button>
+            {/* Familiarity prompt */}
+            {path.familiarity_prompt && path.suggested_start_index > 0 ? (
+              <div className="bg-zinc-900 border border-zinc-700 rounded-2xl p-4 space-y-3">
+                <p className="text-zinc-300 text-sm">{path.familiarity_prompt}</p>
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => router.push(`/feed?session=${path.session_id}`)}
+                    className="flex-1 border border-zinc-700 text-zinc-300 hover:text-white py-3 rounded-xl text-sm font-medium transition"
+                  >
+                    Start from scratch
+                  </button>
+                  <button
+                    onClick={() => router.push(`/feed?session=${path.session_id}&start=${path.suggested_start_index}`)}
+                    className="flex-1 bg-white text-black font-semibold py-3 rounded-xl text-sm hover:bg-zinc-100 transition"
+                  >
+                    Jump ahead →
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                onClick={() => router.push(`/feed?session=${path.session_id}`)}
+                className="w-full bg-white text-black font-semibold py-4 rounded-xl text-lg hover:bg-zinc-100 transition"
+              >
+                Start Watching →
+              </button>
+            )}
+
             <button
               onClick={() => { setPath(null); setQuery(""); }}
               className="w-full text-zinc-500 hover:text-white text-sm py-2 transition"

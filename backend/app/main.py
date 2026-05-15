@@ -9,13 +9,13 @@ load_dotenv()
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
-from app.api import topics, feed
+from app.api import topics, feed, users
 
 app = FastAPI(title="LearnReel API", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=r"http://localhost:\d+",
+    allow_origin_regex=r"http://(localhost|10\.0\.0\.80):\d+",
     allow_origins=["https://your-domain.vercel.app"],
     allow_methods=["*"],
     allow_headers=["*"],
@@ -23,6 +23,7 @@ app.add_middleware(
 
 app.include_router(topics.router)
 app.include_router(feed.router)
+app.include_router(users.router)
 
 
 @app.get("/health")

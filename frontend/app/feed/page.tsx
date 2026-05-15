@@ -13,8 +13,10 @@ function FeedContent() {
   const sessionId = params.get("session");
   const topicSlug = params.get("topic");
 
+  const startIndex = Math.max(0, parseInt(params.get("start") ?? "0") || 0);
+
   const [clips, setClips] = useState<Clip[]>([]);
-  const [activeIndex, setActiveIndex] = useState(0);
+  const [activeIndex, setActiveIndex] = useState(startIndex);
   const [processing, setProcessing] = useState(false);
   const [topicLabels, setTopicLabels] = useState<Record<string, string>>({});
   const [timedOut, setTimedOut] = useState(false);
@@ -78,10 +80,23 @@ function FeedContent() {
     }
   }, [sessionId]);
 
+  const initialScrollDoneRef = useRef(false);
+
   useEffect(() => {
     loadFeed();
     clipStartRef.current = Date.now();
   }, [loadFeed]);
+
+  // Scroll to startIndex once clips are available
+  useEffect(() => {
+    if (initialScrollDoneRef.current || clips.length === 0 || startIndex === 0) return;
+    if (clips.length > startIndex) {
+      initialScrollDoneRef.current = true;
+      const el = containerRef.current?.querySelectorAll("[data-index]")[startIndex] as HTMLElement;
+      el?.scrollIntoView({ behavior: "instant" });
+      setActiveIndex(startIndex);
+    }
+  }, [clips.length, startIndex]);
 
   useEffect(() => {
     if (processing) {
