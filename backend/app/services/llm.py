@@ -1,12 +1,15 @@
 import os
 import json
 import uuid
+from pathlib import Path
 from groq import Groq
 from app.models.schemas import Topic, LearningPath
 
 _client: Groq | None = None
+_curated_cache: list[dict] | None = None
 
 MODEL = "llama-3.3-70b-versatile"
+CURATED_PATH = Path(__file__).resolve().parent.parent.parent / "seed" / "curated_topics.json"
 
 
 def get_client() -> Groq:
@@ -16,6 +19,21 @@ def get_client() -> Groq:
     return _client
 
 
+def _curated_topics() -> list[dict]:
+    """Load curated topic list once. Used to bias slug naming toward existing seeded topics."""
+    global _curated_cache
+    if _curated_cache is None:
+        try:
+            data = json.loads(CURATED_PATH.read_text())
+            _curated_cache = [
+                {"slug": slug, "name": meta["name"], "difficulty": meta.get("difficulty", "beginner")}
+                for slug, meta in data["topics"].items()
+            ]
+        except Exception:
+            _curated_cache = []
+    return _curated_cache
+
+
 SYSTEM_PROMPT = """You are a curriculum designer for an educational short-form video platform.
 When a user describes what they want to learn, you:
 1. Extract specific topics from their query
@@ -23,7 +41,9 @@ When a user describes what they want to learn, you:
 3. Assign difficulty levels
 4. Return a structured JSON learning path
 
-Always return valid JSON matching the schema exactly. Slugs must be lowercase with hyphens (e.g. "binary-search-trees").
+A library of pre-built topics exists. Only reuse a slug from this library if the user's query is asking about EXACTLY that topic. If the user is asking about something different (e.g. a specific framework, tool, or concept not in the library), create a new accurate slug. Never force-fit a query into an existing slug if it's not a genuine match.
+
+Always return valid JSON matching the schema exactly. Slugs must be lowercase with hyphens.
 """
 
 TOPIC_SCHEMA = """
@@ -46,6 +66,13 @@ def parse_learning_path(query: str, session_id: str | None = None) -> LearningPa
     client = get_client()
     sid = session_id or str(uuid.uuid4())
 
+    curated = _curated_topics()
+    curated_block = (
+        "\n\nExisting topic library (REUSE these slugs when semantically applicable):\n"
+        + json.dumps(curated, indent=2)
+        if curated else ""
+    )
+
     response = client.chat.completions.create(
         model=MODEL,
         max_tokens=1024,
@@ -53,7 +80,7 @@ def parse_learning_path(query: str, session_id: str | None = None) -> LearningPa
             {"role": "system", "content": SYSTEM_PROMPT},
             {
                 "role": "user",
-                "content": f"User wants to learn: {query}\n\nReturn JSON matching this schema:\n{TOPIC_SCHEMA}",
+                "content": f"User wants to learn: {query}{curated_block}\n\nReturn JSON matching this schema:\n{TOPIC_SCHEMA}",
             },
         ],
     )

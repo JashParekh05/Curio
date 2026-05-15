@@ -12,13 +12,15 @@ node_modules/
 out/
 *.env.local
 
-# Scrapy
-backend/scrapy_spiders/output/
-backend/scrapy_spiders/.scrapy/
-
 # Misc
 .DS_Store
 *.mp4
 *.wav
 *.mp3
+*.m4a
+*.webm
 tmp/
+
+# YouTube auth & whisper cache
+backend/cookies.txt
+backend/.whisper_cache/

@@ -28,14 +28,31 @@ class Clip(BaseModel):
     transcript: str | None
     source_url: str | None
     source_platform: str | None
+    hook_score: float = 0.5
+    created_at: str | None = None
+
+
+class ClipEvent(BaseModel):
+    session_id: str | None = None
+    watch_ms: int
+    completed: bool = False
+    replay_count: int = 0
 
 
 class TopicRequest(BaseModel):
     query: str
-    session_id: str | None = None
+    user_id: str | None = None
 
 
 class FeedResponse(BaseModel):
     topic_slug: str
     clips: list[Clip]
     processing: bool = False
+
+
+class TopicRecommendation(BaseModel):
+    slug: str
+    name: str
+    difficulty: str
+    clip_count: int
+    rationale: str

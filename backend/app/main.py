@@ -1,8 +1,13 @@
+import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# Suppress noisy httpx/supabase request logs — only show warnings+
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 from app.api import topics, feed
 
@@ -10,7 +15,8 @@ app = FastAPI(title="LearnReel API", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "https://your-domain.vercel.app"],
+    allow_origin_regex=r"http://localhost:\d+",
+    allow_origins=["https://your-domain.vercel.app"],
     allow_methods=["*"],
     allow_headers=["*"],
 )

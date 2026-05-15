@@ -26,6 +26,7 @@ export interface Clip {
   transcript: string | null;
   source_url: string | null;
   source_platform: string | null;
+  hook_score: number;
 }
 
 export interface FeedResponse {
@@ -36,14 +37,27 @@ export interface FeedResponse {
 
 export async function createLearningPath(
   query: string,
-  sessionId?: string
+  userId?: string
 ): Promise<LearningPath> {
   const res = await fetch(`${API_BASE}/api/topics/`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ query, session_id: sessionId }),
+    body: JSON.stringify({ query, user_id: userId }),
   });
   if (!res.ok) throw new Error("Failed to create learning path");
+  return res.json();
+}
+
+export interface LearningPathSummary {
+  session_id: string;
+  user_query: string;
+  topic_count: number;
+  created_at: string;
+}
+
+export async function getUserHistory(userId: string): Promise<LearningPathSummary[]> {
+  const res = await fetch(`${API_BASE}/api/topics/history/${encodeURIComponent(userId)}`);
+  if (!res.ok) return [];
   return res.json();
 }
 
@@ -63,4 +77,38 @@ export async function getPathFeed(sessionId: string): Promise<FeedResponse[]> {
   const res = await fetch(`${API_BASE}/api/feed/path/${sessionId}`);
   if (!res.ok) throw new Error("Failed to fetch path feed");
   return res.json();
+}
+
+export interface TopicRecommendation {
+  slug: string;
+  name: string;
+  difficulty: "beginner" | "intermediate" | "advanced";
+  clip_count: number;
+  rationale: string;
+}
+
+export async function getRecommendations(sessionId: string): Promise<TopicRecommendation[]> {
+  const res = await fetch(`${API_BASE}/api/feed/recommendations/${sessionId}`);
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export function recordClipEvent(
+  clipId: string,
+  watchMs: number,
+  completed: boolean,
+  sessionId?: string | null,
+  replayCount?: number
+): void {
+  // Fire-and-forget — don't block the UI
+  fetch(`${API_BASE}/api/feed/${clipId}/events`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      watch_ms: watchMs,
+      completed,
+      session_id: sessionId ?? null,
+      replay_count: replayCount ?? 0,
+    }),
+  }).catch(() => {});
 }

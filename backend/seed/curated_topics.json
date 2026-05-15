@@ -1,0 +1,189 @@
+{
+  "_comment": "Curated educational videos for instant clip serving. Hand-pick short (3-10 min) high-quality videos per topic. Run `python -m scripts.seed_clips` to process them.",
+  "topics": {
+    "neural-networks-basics": {
+      "name": "Neural Networks Basics",
+      "difficulty": "beginner",
+      "prerequisites": [],
+      "videos": [
+        "https://www.youtube.com/watch?v=CqOfi41LfDw"
+      ]
+    },
+    "gradient-descent": {
+      "name": "Gradient Descent",
+      "difficulty": "intermediate",
+      "prerequisites": ["neural-networks-basics"],
+      "videos": [
+        "https://www.youtube.com/watch?v=sDv4f4s2SB8"
+      ]
+    },
+    "backpropagation": {
+      "name": "Backpropagation",
+      "difficulty": "intermediate",
+      "prerequisites": ["gradient-descent"],
+      "videos": [
+        "https://www.youtube.com/watch?v=VMj-3S1tku0"
+      ]
+    },
+    "transformers-attention": {
+      "name": "Transformers & Attention",
+      "difficulty": "advanced",
+      "prerequisites": ["neural-networks-basics"],
+      "videos": [
+        "https://www.youtube.com/watch?v=zxQyTK8quyY"
+      ]
+    },
+    "linear-algebra-vectors": {
+      "name": "Linear Algebra: Vectors",
+      "difficulty": "beginner",
+      "prerequisites": [],
+      "videos": [
+        "https://www.youtube.com/watch?v=ml4NSzCQobk"
+      ]
+    },
+    "linear-algebra-matrices": {
+      "name": "Linear Algebra: Matrix Transformations",
+      "difficulty": "intermediate",
+      "prerequisites": ["linear-algebra-vectors"],
+      "videos": [
+        "https://www.youtube.com/watch?v=rowWM-x7wT0"
+      ]
+    },
+    "calculus-derivatives": {
+      "name": "Calculus: Derivatives",
+      "difficulty": "beginner",
+      "prerequisites": [],
+      "videos": [
+        "https://www.youtube.com/watch?v=9vKqVkMQHKk"
+      ]
+    },
+    "calculus-chain-rule": {
+      "name": "Calculus: Chain Rule",
+      "difficulty": "intermediate",
+      "prerequisites": ["calculus-derivatives"],
+      "videos": [
+        "https://www.youtube.com/watch?v=H-ybCx8gt-8"
+      ]
+    },
+    "fourier-transform": {
+      "name": "Fourier Transform",
+      "difficulty": "advanced",
+      "prerequisites": ["calculus-derivatives"],
+      "videos": [
+        "https://www.youtube.com/watch?v=spUNpyF58BY"
+      ]
+    },
+    "bayes-theorem": {
+      "name": "Bayes' Theorem",
+      "difficulty": "intermediate",
+      "prerequisites": [],
+      "videos": [
+        "https://www.youtube.com/watch?v=HZGCoVF3YvM"
+      ]
+    },
+    "binary-search": {
+      "name": "Binary Search",
+      "difficulty": "beginner",
+      "prerequisites": [],
+      "videos": [
+        "https://www.youtube.com/watch?v=KXJSjte_OAI"
+      ]
+    },
+    "hashmaps": {
+      "name": "Hash Maps",
+      "difficulty": "beginner",
+      "prerequisites": [],
+      "videos": [
+        "https://www.youtube.com/watch?v=shs0KM3wKv8"
+      ]
+    },
+    "binary-trees": {
+      "name": "Binary Trees",
+      "difficulty": "beginner",
+      "prerequisites": [],
+      "videos": [
+        "https://www.youtube.com/watch?v=H5JubkIy_p8"
+      ]
+    },
+    "graphs-bfs-dfs": {
+      "name": "Graph Traversal: BFS & DFS",
+      "difficulty": "intermediate",
+      "prerequisites": ["binary-trees"],
+      "videos": [
+        "https://www.youtube.com/watch?v=pcKY4hjDrxk"
+      ]
+    },
+    "dynamic-programming": {
+      "name": "Dynamic Programming",
+      "difficulty": "advanced",
+      "prerequisites": ["graphs-bfs-dfs"],
+      "videos": [
+        "https://www.youtube.com/watch?v=oBt53YbR9Kk"
+      ]
+    },
+    "big-o-notation": {
+      "name": "Big O Notation",
+      "difficulty": "beginner",
+      "prerequisites": [],
+      "videos": [
+        "https://www.youtube.com/watch?v=Mo4vesaut8g"
+      ]
+    },
+    "git-basics": {
+      "name": "Git Basics",
+      "difficulty": "beginner",
+      "prerequisites": [],
+      "videos": [
+        "https://www.youtube.com/watch?v=hwP7WQkmECE"
+      ]
+    },
+    "sql-fundamentals": {
+      "name": "SQL Fundamentals",
+      "difficulty": "beginner",
+      "prerequisites": [],
+      "videos": [
+        "https://www.youtube.com/watch?v=zsjvFFKOm3c"
+      ]
+    },
+    "rest-apis": {
+      "name": "REST APIs",
+      "difficulty": "beginner",
+      "prerequisites": [],
+      "videos": [
+        "https://www.youtube.com/watch?v=-MTSQjw5DrM"
+      ]
+    },
+    "general-relativity": {
+      "name": "General Relativity",
+      "difficulty": "advanced",
+      "prerequisites": [],
+      "videos": [
+        "https://www.youtube.com/watch?v=wrwgIjBUYVc"
+      ]
+    },
+    "quantum-entanglement": {
+      "name": "Quantum Entanglement",
+      "difficulty": "advanced",
+      "prerequisites": [],
+      "videos": [
+        "https://www.youtube.com/watch?v=ZuvK-od647c"
+      ]
+    },
+    "dna-replication": {
+      "name": "DNA Replication",
+      "difficulty": "beginner",
+      "prerequisites": [],
+      "videos": [
+        "https://www.youtube.com/watch?v=TNKWgcFPHqw"
+      ]
+    },
+    "supply-and-demand": {
+      "name": "Supply and Demand",
+      "difficulty": "beginner",
+      "prerequisites": [],
+      "videos": [
+        "https://www.youtube.com/watch?v=g8VzCRUFAtI"
+      ]
+    }
+  }
+}

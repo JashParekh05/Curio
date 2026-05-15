@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Clip } from "@/lib/api";
 
 interface Props {
@@ -9,73 +9,165 @@ interface Props {
   onEnded: () => void;
 }
 
-export default function ReelPlayer({ clip, active, onEnded }: Props) {
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const [muted, setMuted] = useState(false);
-  const [showCaption, setShowCaption] = useState(true);
+function isYouTubeEmbed(url: string) {
+  return url.includes("youtube.com/embed");
+}
 
+function sanitizeYTUrl(url: string): string {
+  try {
+    const u = new URL(url);
+    u.searchParams.delete("enablejsapi");
+    u.searchParams.set("autoplay", "1");
+    u.searchParams.set("rel", "0");
+    u.searchParams.set("modestbranding", "1");
+    u.searchParams.set("origin", window.location.origin);
+    return u.toString();
+  } catch {
+    return url;
+  }
+}
+
+function parseYTParams(url: string): { start: number; end: number } {
+  try {
+    const u = new URL(url);
+    return {
+      start: parseInt(u.searchParams.get("start") ?? "0"),
+      end: parseInt(u.searchParams.get("end") ?? "0"),
+    };
+  } catch {
+    return { start: 0, end: 0 };
+  }
+}
+
+function SourceBadge({ platform }: { platform: string | null }) {
+  if (!platform) return null;
+  const isKA = platform === "khan_academy";
+  return (
+    <span
+      className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
+        isKA
+          ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30"
+          : "bg-zinc-700/60 text-zinc-300 border border-zinc-600/40"
+      }`}
+    >
+      {isKA ? "Khan Academy" : "YouTube"}
+    </span>
+  );
+}
+
+export default function ReelPlayer({ clip, active, onEnded }: Props) {
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [showCaption, setShowCaption] = useState(true);
+  const [clipExpired, setClipExpired] = useState(false);
+
+  const isYT = isYouTubeEmbed(clip.video_url);
+  const { end } = parseYTParams(clip.video_url);
+
+  // Reset state when clip changes
   useEffect(() => {
-    const video = videoRef.current;
-    if (!video) return;
+    setClipExpired(false);
+  }, [clip.id]);
+
+  // Native video: play/reset on active
+  useEffect(() => {
+    if (isYT || !videoRef.current) return;
     if (active) {
-      video.currentTime = 0;
-      video.play().catch(() => {});
+      videoRef.current.currentTime = 0;
+      videoRef.current.play().catch(() => {});
     } else {
-      video.pause();
+      videoRef.current.pause();
     }
-  }, [active]);
+  }, [active, isYT]);
+
+  // YouTube: when clip has a known end time, show "next clip" overlay after duration
+  useEffect(() => {
+    if (!isYT || !active || !clip.duration_seconds) return;
+    setClipExpired(false);
+    const timer = setTimeout(() => setClipExpired(true), clip.duration_seconds * 1000);
+    return () => clearTimeout(timer);
+  }, [active, isYT, clip.duration_seconds, clip.id]);
 
   return (
-    <div className="relative w-full h-full bg-black flex items-center justify-center">
-      <video
-        ref={videoRef}
-        src={clip.video_url}
-        className="w-full h-full object-cover"
-        playsInline
-        muted={muted}
-        onEnded={onEnded}
-        preload="auto"
-      />
+    <div className="absolute inset-0 bg-zinc-950 flex items-center justify-center">
+      {isYT ? (
+        <iframe
+          ref={iframeRef}
+          src={active ? sanitizeYTUrl(clip.video_url) : "about:blank"}
+          title={clip.title}
+          className="absolute inset-0 w-full h-full"
+          allow="autoplay; encrypted-media; fullscreen"
+          allowFullScreen
+        />
+      ) : (
+        <video
+          ref={videoRef}
+          src={clip.video_url}
+          className="absolute inset-0 w-full h-full object-cover"
+          playsInline
+          onEnded={onEnded}
+          preload="auto"
+        />
+      )}
 
-      {/* Gradient overlay */}
-      <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent pointer-events-none" />
+      {/* Gradient overlays */}
+      <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/10 to-black/30 pointer-events-none" />
 
-      {/* Captions */}
-      {showCaption && clip.transcript && (
-        <div className="absolute bottom-24 left-4 right-4 text-center">
-          <p className="text-white text-sm bg-black/50 rounded-lg px-3 py-2 inline-block">
-            {clip.transcript.slice(0, 120)}
-            {clip.transcript.length > 120 ? "…" : ""}
+      {/* Clip expired overlay for YouTube (end timestamp) */}
+      {clipExpired && (
+        <div className="absolute inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-10">
+          <button
+            onClick={onEnded}
+            className="bg-white text-black font-semibold px-6 py-3 rounded-2xl text-sm hover:bg-zinc-100 active:scale-95 transition"
+          >
+            Next clip →
+          </button>
+        </div>
+      )}
+
+      {/* Caption */}
+      {showCaption && clip.transcript && !clipExpired && (
+        <div className="absolute bottom-28 left-4 right-16 pointer-events-none">
+          <p className="text-white text-sm leading-relaxed bg-black/60 backdrop-blur-sm rounded-xl px-3 py-2 inline-block max-w-full">
+            {clip.transcript.slice(0, 140)}
+            {clip.transcript.length > 140 ? "…" : ""}
           </p>
         </div>
       )}
 
-      {/* Info */}
-      <div className="absolute bottom-6 left-4 right-16 space-y-1">
-        <p className="text-white font-semibold text-base leading-tight">{clip.title}</p>
+      {/* Bottom info */}
+      <div className="absolute bottom-5 left-4 right-16 space-y-1.5 pointer-events-none">
+        <div className="flex items-center gap-2">
+          <SourceBadge platform={clip.source_platform} />
+          {clip.duration_seconds && (
+            <span className="text-zinc-500 text-[10px]">{clip.duration_seconds}s</span>
+          )}
+        </div>
+        <p className="text-white font-semibold text-base leading-tight drop-shadow">{clip.title}</p>
         {clip.description && (
-          <p className="text-zinc-300 text-sm line-clamp-2">{clip.description}</p>
-        )}
-        {clip.source_platform && (
-          <p className="text-zinc-400 text-xs capitalize">{clip.source_platform.replace("_", " ")}</p>
+          <p className="text-zinc-300 text-sm line-clamp-2 leading-snug">{clip.description}</p>
         )}
       </div>
 
-      {/* Controls */}
-      <div className="absolute right-3 bottom-20 flex flex-col gap-4 items-center">
-        <button
-          onClick={() => setMuted((m) => !m)}
-          className="w-10 h-10 rounded-full bg-white/10 backdrop-blur flex items-center justify-center text-white text-lg"
-          aria-label="Toggle mute"
-        >
-          {muted ? "🔇" : "🔊"}
-        </button>
+      {/* Right controls */}
+      <div className="absolute right-3 bottom-16 flex flex-col gap-3 items-center z-10">
         <button
           onClick={() => setShowCaption((c) => !c)}
-          className="w-10 h-10 rounded-full bg-white/10 backdrop-blur flex items-center justify-center text-white text-xs font-bold"
-          aria-label="Toggle captions"
+          className={`w-11 h-11 rounded-full backdrop-blur-sm border flex items-center justify-center text-xs font-bold transition ${
+            showCaption
+              ? "bg-white/20 border-white/30 text-white"
+              : "bg-black/30 border-zinc-700 text-zinc-500"
+          }`}
+          title="Toggle captions"
         >
           CC
+        </button>
+        <button
+          onClick={onEnded}
+          className="w-11 h-11 rounded-full bg-white/10 backdrop-blur-sm border border-white/20 flex items-center justify-center text-white text-lg hover:bg-white/20 active:scale-95 transition"
+          title="Next clip"
+        >
+          ↓
         </button>
       </div>
     </div>

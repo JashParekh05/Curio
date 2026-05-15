@@ -1,8 +1,309 @@
+import math
+import re
+import logging
+import asyncio
+from datetime import datetime, timezone
 from fastapi import APIRouter, Query
-from app.models.schemas import Clip, FeedResponse
+from app.models.schemas import Clip, ClipEvent, FeedResponse, TopicRecommendation
 from app.db.supabase import get_client
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/feed", tags=["feed"])
+
+
+# ---------------------------------------------------------------------------
+# Telemetry helpers
+# ---------------------------------------------------------------------------
+
+def _get_session_telemetry(db, session_id: str) -> tuple[set[str], dict[str, float]]:
+    """Returns (seen_clip_ids, topic_completion_rates)."""
+    events = (
+        db.table("clip_events")
+        .select("clip_id, watch_ms, completed")
+        .eq("session_id", session_id)
+        .execute()
+    )
+
+    seen_ids: set[str] = set()
+    topic_watches: dict[str, list[bool]] = {}
+
+    for ev in events.data:
+        seen_ids.add(ev["clip_id"])
+        clip = db.table("clips").select("topic_slug").eq("id", ev["clip_id"]).limit(1).execute()
+        if clip.data:
+            slug = clip.data[0]["topic_slug"]
+            topic_watches.setdefault(slug, []).append(ev["completed"])
+
+    topic_completion = {
+        slug: sum(completions) / len(completions)
+        for slug, completions in topic_watches.items()
+    }
+    return seen_ids, topic_completion
+
+
+def _update_interest_vector(db, session_id: str, topic_slug: str, completed: bool, replay_count: int) -> None:
+    """Real-time interest vector update after a clip event (Monolith-inspired)."""
+    existing = (
+        db.table("session_embeddings")
+        .select("interest_vector")
+        .eq("session_id", session_id)
+        .limit(1)
+        .execute()
+    )
+    vector = existing.data[0]["interest_vector"] if existing.data else {}
+
+    delta = (0.15 if completed else -0.05) + replay_count * 0.3
+    current = float(vector.get(topic_slug, 0.0))
+    vector[topic_slug] = round(max(-1.0, min(1.0, current + delta)), 3)
+
+    db.table("session_embeddings").upsert({
+        "session_id": session_id,
+        "interest_vector": vector,
+        "updated_at": "now()",
+    }).execute()
+
+
+# ---------------------------------------------------------------------------
+# Multi-signal scoring (PLE-inspired)
+# ---------------------------------------------------------------------------
+
+def _get_clip_population_stats(db, clip_ids: list[str]) -> dict[str, float]:
+    """Population-level completion rate per clip across all sessions."""
+    if not clip_ids:
+        return {}
+    rows = (
+        db.table("clip_events")
+        .select("clip_id, completed")
+        .in_("clip_id", clip_ids)
+        .execute()
+    )
+    totals: dict[str, list[bool]] = {}
+    for r in rows.data:
+        totals.setdefault(r["clip_id"], []).append(bool(r["completed"]))
+    return {cid: sum(v) / len(v) for cid, v in totals.items()}
+
+
+def _compute_scores(
+    clips: list[Clip],
+    pop_stats: dict[str, float],
+    user_avg_watch_seconds: float | None,
+    interest_vector: dict[str, float] | None = None,
+) -> list[Clip]:
+    """
+    final_score = 0.30 * hook_score
+                + 0.25 * population_completion_rate
+                + 0.20 * duration_affinity
+                + 0.15 * recency_bonus
+                + 0.10 * interest_affinity   (0 when no vector)
+    """
+    now = datetime.now(timezone.utc)
+    for clip in clips:
+        hook = clip.hook_score or 0.5
+        pop = pop_stats.get(clip.id, hook)
+
+        dur_affinity = 1.0
+        if user_avg_watch_seconds and clip.duration_seconds:
+            ratio = clip.duration_seconds / max(user_avg_watch_seconds, 10)
+            dur_affinity = math.exp(-0.3 * max(0, ratio - 1.5))
+
+        recency = 0.5
+        if clip.created_at:
+            try:
+                age_days = (now - datetime.fromisoformat(clip.created_at.replace("Z", "+00:00"))).days
+                recency = math.exp(-age_days / 7)
+            except Exception:
+                pass
+
+        # Normalize interest affinity from [-1, 1] → [0, 1]
+        raw_affinity = float((interest_vector or {}).get(clip.topic_slug, 0.0))
+        affinity = (raw_affinity + 1.0) / 2.0
+
+        clip.hook_score = round(
+            0.30 * hook + 0.25 * pop + 0.20 * dur_affinity + 0.15 * recency + 0.10 * affinity,
+            4,
+        )
+    return clips
+
+
+# ---------------------------------------------------------------------------
+# Transcript keyword boost
+# ---------------------------------------------------------------------------
+
+_STOPWORDS = {"the", "and", "for", "that", "with", "how", "what", "want", "learn", "about", "using"}
+
+
+def _transcript_boost(clips: list[Clip], user_query: str) -> list[Clip]:
+    """Boost clips whose transcript contains keywords from the user's query (Transcript SEO)."""
+    if not user_query:
+        return clips
+    keywords = set(re.findall(r'\b[a-z]{3,}\b', user_query.lower())) - _STOPWORDS
+    if not keywords:
+        return clips
+    for clip in clips:
+        if not clip.transcript:
+            continue
+        transcript_lower = clip.transcript.lower()
+        matches = sum(1 for kw in keywords if kw in transcript_lower)
+        clip.hook_score = round(min(1.0, clip.hook_score + 0.15 * matches / len(keywords)), 4)
+    return clips
+
+
+# ---------------------------------------------------------------------------
+# Diversity injection (anti-echo-chamber)
+# ---------------------------------------------------------------------------
+
+def _interleave_topics(feeds: list[FeedResponse]) -> list[FeedResponse]:
+    """Round-robin: every 4th clip in primary topic, inject one from next topic."""
+    if len(feeds) <= 1:
+        return feeds
+    active = [(f.topic_slug, list(f.clips)) for f in feeds if f.clips]
+    if not active:
+        return feeds
+
+    result: dict[str, list[Clip]] = {slug: [] for slug, _ in active}
+    primary_slug, primary_clips = active[0]
+    others = active[1:]
+    other_idx = 0
+
+    for i, clip in enumerate(primary_clips):
+        result[primary_slug].append(clip)
+        if (i + 1) % 4 == 0 and others:
+            o_slug, o_clips = others[other_idx % len(others)]
+            if o_clips:
+                result[o_slug].append(o_clips.pop(0))
+            other_idx += 1
+
+    for o_slug, o_clips in others:
+        result[o_slug].extend(o_clips)
+
+    return [
+        FeedResponse(
+            topic_slug=f.topic_slug,
+            clips=result.get(f.topic_slug, f.clips),
+            processing=f.processing,
+        )
+        for f in feeds
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Clip fetching
+# ---------------------------------------------------------------------------
+
+def _fetch_clips_for_slug(
+    db,
+    slug: str,
+    seen_ids: set[str] | None = None,
+    limit: int = 20,
+    user_avg_watch_seconds: float | None = None,
+    interest_vector: dict[str, float] | None = None,
+) -> list[Clip]:
+    result = (
+        db.table("clips")
+        .select("*")
+        .eq("topic_slug", slug)
+        .order("created_at", desc=False)
+        .limit(limit)
+        .execute()
+    )
+    clips = []
+    for row in result.data:
+        if seen_ids and row["id"] in seen_ids:
+            continue
+        row.setdefault("hook_score", 0.5)
+        clips.append(Clip(**row))
+
+    clip_ids = [c.id for c in clips]
+    pop_stats = _get_clip_population_stats(db, clip_ids)
+    clips = _compute_scores(clips, pop_stats, user_avg_watch_seconds, interest_vector)
+    return sorted(clips, key=lambda c: c.hook_score, reverse=True)
+
+
+# ---------------------------------------------------------------------------
+# Endpoints
+# ---------------------------------------------------------------------------
+
+@router.get("/path/{session_id}", response_model=list[FeedResponse])
+async def get_path_feed(session_id: str):
+    db = get_client()
+    path = (
+        db.table("learning_paths")
+        .select("topic_slugs, user_query")
+        .eq("session_id", session_id)
+        .limit(1)
+        .execute()
+    )
+    if not path.data:
+        return []
+
+    user_query = path.data[0].get("user_query", "")
+    seen_ids, topic_completion = _get_session_telemetry(db, session_id)
+
+    # User's typical engagement length from completed clips
+    watch_rows = (
+        db.table("clip_events")
+        .select("watch_ms")
+        .eq("session_id", session_id)
+        .eq("completed", True)
+        .limit(20)
+        .execute()
+    )
+    user_avg_watch_seconds = (
+        sum(r["watch_ms"] for r in watch_rows.data) / len(watch_rows.data) / 1000
+        if watch_rows.data else None
+    )
+
+    # Live interest vector for personalized re-ranking
+    iv_res = (
+        db.table("session_embeddings")
+        .select("interest_vector")
+        .eq("session_id", session_id)
+        .limit(1)
+        .execute()
+    )
+    interest_vector: dict[str, float] = iv_res.data[0]["interest_vector"] if iv_res.data else {}
+
+    feeds = []
+    for slug in path.data[0]["topic_slugs"]:
+        clips = _fetch_clips_for_slug(
+            db, slug,
+            seen_ids=seen_ids,
+            user_avg_watch_seconds=user_avg_watch_seconds,
+            interest_vector=interest_vector,
+        )
+        completion_rate = topic_completion.get(slug, 0.0)
+
+        # Struggling on this topic: sort by shortest clips first
+        if completion_rate < 0.3 and slug in topic_completion:
+            clips = sorted(clips, key=lambda c: c.duration_seconds or 999)
+
+        clips = _transcript_boost(clips, user_query)
+
+        feeds.append(FeedResponse(
+            topic_slug=slug,
+            clips=clips,
+            processing=len(clips) == 0,
+        ))
+
+    return _interleave_topics(feeds)
+
+
+@router.get("/recommendations/{session_id}", response_model=list[TopicRecommendation])
+async def get_recommendations(session_id: str):
+    db = get_client()
+    path = (
+        db.table("learning_paths")
+        .select("topic_slugs")
+        .eq("session_id", session_id)
+        .limit(1)
+        .execute()
+    )
+    if not path.data:
+        return []
+    path_slugs = path.data[0]["topic_slugs"]
+
+    from app.agents.recommendation_agent import run_recommendations
+    return await asyncio.to_thread(run_recommendations, session_id, path_slugs)
 
 
 @router.get("/{topic_slug}", response_model=FeedResponse)
@@ -16,50 +317,40 @@ async def get_feed(
         db.table("clips")
         .select("*")
         .eq("topic_slug", topic_slug)
+        .order("created_at", desc=False)
         .range(offset, offset + limit - 1)
         .execute()
     )
-
-    clips = [Clip(**row) for row in result.data]
-
-    # If no clips yet, the worker is still processing
-    processing = len(clips) == 0
-
-    return FeedResponse(
-        topic_slug=topic_slug,
-        clips=clips,
-        processing=processing,
-    )
+    clips = []
+    for row in result.data:
+        row.setdefault("hook_score", 0.5)
+        clips.append(Clip(**row))
+    clip_ids = [c.id for c in clips]
+    pop_stats = _get_clip_population_stats(db, clip_ids)
+    clips = _compute_scores(clips, pop_stats, None)
+    clips = sorted(clips, key=lambda c: c.hook_score, reverse=True)
+    return FeedResponse(topic_slug=topic_slug, clips=clips, processing=len(clips) == 0)
 
 
-@router.get("/path/{session_id}", response_model=list[FeedResponse])
-async def get_path_feed(session_id: str):
-    """Return clips for every topic in a learning path, in order."""
+@router.post("/{clip_id}/events", status_code=204)
+async def record_clip_event(clip_id: str, event: ClipEvent):
     db = get_client()
-    path = (
-        db.table("learning_paths")
-        .select("topic_slugs")
-        .eq("session_id", session_id)
-        .single()
-        .execute()
-    )
+    try:
+        db.table("clip_events").insert({
+            "clip_id": clip_id,
+            "session_id": event.session_id,
+            "watch_ms": event.watch_ms,
+            "completed": event.completed,
+            "replay_count": event.replay_count,
+        }).execute()
+    except Exception:
+        logger.warning(f"Failed to record event for clip {clip_id}")
+        return
 
-    feeds = []
-    for slug in path.data["topic_slugs"]:
-        result = (
-            db.table("clips")
-            .select("*")
-            .eq("topic_slug", slug)
-            .limit(10)
-            .execute()
-        )
-        clips = [Clip(**row) for row in result.data]
-        feeds.append(
-            FeedResponse(
-                topic_slug=slug,
-                clips=clips,
-                processing=len(clips) == 0,
+    if event.session_id:
+        clip = db.table("clips").select("topic_slug").eq("id", clip_id).limit(1).execute()
+        if clip.data:
+            _update_interest_vector(
+                db, event.session_id, clip.data[0]["topic_slug"],
+                event.completed, event.replay_count,
             )
-        )
-
-    return feeds

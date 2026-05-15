@@ -1,0 +1,208 @@
+"""LangGraph agent: multi-step learning path generation with intent understanding + validation."""
+import json
+import uuid
+import logging
+from typing import TypedDict, Annotated
+import operator
+
+from langgraph.graph import StateGraph, END
+from app.models.schemas import Topic, LearningPath
+
+logger = logging.getLogger(__name__)
+
+MODEL = "llama-3.3-70b-versatile"
+
+
+class CurriculumState(TypedDict):
+    query: str
+    session_id: str
+    intent: dict                  # {goal, level, domain, specific_concepts}
+    curated_topics: list[dict]
+    raw_path: dict                # LLM output before validation
+    learning_path: LearningPath | None
+    errors: Annotated[list[str], operator.add]
+
+
+def _groq():
+    import os
+    from groq import Groq
+    return Groq(api_key=os.environ["GROQ_API_KEY"])
+
+
+def _node_understand_intent(state: CurriculumState) -> dict:
+    """Classify the user's learning goal before generating a curriculum."""
+    client = _groq()
+    response = client.chat.completions.create(
+        model=MODEL,
+        max_tokens=256,
+        messages=[
+            {
+                "role": "system",
+                "content": "Extract the learner's intent from their query. Return JSON only.",
+            },
+            {
+                "role": "user",
+                "content": f"""Query: "{state['query']}"
+
+Return JSON:
+{{
+  "goal": "what they want to achieve (one sentence)",
+  "level": "beginner|intermediate|advanced",
+  "domain": "broad subject area",
+  "specific_concepts": ["list", "of", "specific", "things", "they", "mentioned"]
+}}""",
+            },
+        ],
+    )
+    raw = response.choices[0].message.content.strip()
+    if "```" in raw:
+        raw = raw.split("```")[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+    try:
+        intent = json.loads(raw.strip())
+    except Exception:
+        intent = {"goal": state["query"], "level": "beginner", "domain": "general", "specific_concepts": []}
+    logger.info(f"[curriculum_agent] intent: {intent}")
+    return {"intent": intent}
+
+
+def _node_load_curated(state: CurriculumState) -> dict:
+    from app.services.llm import _curated_topics
+    return {"curated_topics": _curated_topics()}
+
+
+def _node_build_curriculum(state: CurriculumState) -> dict:
+    """Generate the ordered learning path using intent + curated library."""
+    client = _groq()
+    intent = state["intent"]
+    curated = state["curated_topics"]
+
+    curated_block = (
+        "\n\nExisting topic library (REUSE these slugs when semantically applicable):\n"
+        + json.dumps(curated, indent=2)
+        if curated else ""
+    )
+
+    system = f"""You are a curriculum designer for an educational short-form video platform.
+The learner's goal: {intent.get('goal', state['query'])}
+Their level: {intent.get('level', 'beginner')}
+Domain: {intent.get('domain', 'general')}
+
+Order topics from foundational to advanced (prerequisites first).
+A library of pre-built topics exists. Only reuse a slug if the topic is EXACTLY the same concept.
+If the user asks about something specific (e.g. a framework or tool not in the library), create a new accurate slug.
+Slugs must be lowercase with hyphens. Always return valid JSON."""
+
+    schema = """
+{
+  "summary": "one sentence describing the learning path",
+  "topics": [
+    {
+      "slug": "topic-slug",
+      "name": "Human Readable Name",
+      "difficulty": "beginner|intermediate|advanced",
+      "prerequisites": ["slug-of-prereq"],
+      "rationale": "why this topic is ordered here"
+    }
+  ]
+}"""
+
+    response = client.chat.completions.create(
+        model=MODEL,
+        max_tokens=1024,
+        messages=[
+            {"role": "system", "content": system},
+            {
+                "role": "user",
+                "content": f"User wants to learn: {state['query']}{curated_block}\n\nReturn JSON matching this schema:\n{schema}",
+            },
+        ],
+    )
+
+    raw = response.choices[0].message.content.strip()
+    if "```" in raw:
+        raw = raw.split("```")[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+
+    try:
+        data = json.loads(raw.strip())
+        return {"raw_path": data}
+    except Exception as exc:
+        return {"raw_path": {}, "errors": [f"JSON parse failed: {exc}"]}
+
+
+def _node_validate_path(state: CurriculumState) -> dict:
+    """Validate and assemble the LearningPath object. Falls back gracefully on errors."""
+    data = state["raw_path"]
+    if not data or "topics" not in data:
+        return {"errors": ["Empty or invalid path from LLM"], "learning_path": None}
+
+    try:
+        topics = [Topic(**t) for t in data["topics"]]
+        # Validate slug uniqueness
+        slugs = [t.slug for t in topics]
+        if len(slugs) != len(set(slugs)):
+            # deduplicate
+            seen: set[str] = set()
+            unique = []
+            for t in topics:
+                if t.slug not in seen:
+                    seen.add(t.slug)
+                    unique.append(t)
+            topics = unique
+
+        path = LearningPath(
+            session_id=state["session_id"],
+            user_query=state["query"],
+            topics=topics,
+            summary=data.get("summary", ""),
+        )
+        logger.info(f"[curriculum_agent] path validated: {len(topics)} topics")
+        return {"learning_path": path}
+    except Exception as exc:
+        return {"errors": [f"Validation failed: {exc}"], "learning_path": None}
+
+
+def build_curriculum_graph() -> StateGraph:
+    g = StateGraph(CurriculumState)
+    g.add_node("understand_intent", _node_understand_intent)
+    g.add_node("load_curated", _node_load_curated)
+    g.add_node("build_curriculum", _node_build_curriculum)
+    g.add_node("validate_path", _node_validate_path)
+    g.set_entry_point("understand_intent")
+    g.add_edge("understand_intent", "load_curated")
+    g.add_edge("load_curated", "build_curriculum")
+    g.add_edge("build_curriculum", "validate_path")
+    g.add_edge("validate_path", END)
+    return g.compile()
+
+
+_curriculum_graph = None
+
+
+def run_curriculum(query: str, session_id: str | None = None) -> LearningPath:
+    """Run multi-step curriculum generation. Returns a LearningPath."""
+    global _curriculum_graph
+    if _curriculum_graph is None:
+        _curriculum_graph = build_curriculum_graph()
+
+    sid = session_id or str(uuid.uuid4())
+    result = _curriculum_graph.invoke({
+        "query": query,
+        "session_id": sid,
+        "intent": {},
+        "curated_topics": [],
+        "raw_path": {},
+        "learning_path": None,
+        "errors": [],
+    })
+
+    if result["learning_path"] is None:
+        # Hard fallback to single-step generation
+        logger.warning(f"[curriculum_agent] falling back to direct llm call: {result['errors']}")
+        from app.services.llm import parse_learning_path
+        return parse_learning_path(query, sid)
+
+    return result["learning_path"]

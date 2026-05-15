@@ -1,13 +1,13 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { Suspense, useEffect, useRef, useState, useCallback } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
-import { getPathFeed, getTopicFeed, type Clip, type FeedResponse } from "@/lib/api";
+import { getPathFeed, getTopicFeed, recordClipEvent, getRecommendations, type Clip, type FeedResponse, type TopicRecommendation } from "@/lib/api";
 import ReelPlayer from "@/components/ReelPlayer";
 
 const POLL_INTERVAL_MS = 4000;
 
-export default function FeedPage() {
+function FeedContent() {
   const params = useSearchParams();
   const router = useRouter();
   const sessionId = params.get("session");
@@ -17,9 +17,19 @@ export default function FeedPage() {
   const [activeIndex, setActiveIndex] = useState(0);
   const [processing, setProcessing] = useState(false);
   const [topicLabels, setTopicLabels] = useState<Record<string, string>>({});
+  const [timedOut, setTimedOut] = useState(false);
+  const [recommendations, setRecommendations] = useState<TopicRecommendation[]>([]);
 
   const containerRef = useRef<HTMLDivElement>(null);
-  const pollingRef = useRef<NodeJS.Timeout>();
+  const pollingRef = useRef<NodeJS.Timeout | undefined>(undefined);
+  const activeIndexRef = useRef(0);
+  const clipStartRef = useRef<number>(Date.now());
+  const clipVisitsRef = useRef<Record<string, number>>({});
+  const seenClipIdsRef = useRef<Set<string>>(new Set());
+  const fetchingMoreRef = useRef(false);
+
+  // Touch swipe state
+  const touchStartY = useRef<number | null>(null);
 
   const loadFeed = useCallback(async () => {
     try {
@@ -27,7 +37,10 @@ export default function FeedPage() {
         const feeds: FeedResponse[] = await getPathFeed(sessionId);
         const allClips = feeds.flatMap((f) => f.clips);
         const labels: Record<string, string> = {};
-        feeds.forEach((f) => { labels[f.topic_slug] = f.topic_slug; });
+        feeds.forEach((f) => {
+          f.clips.forEach((c) => { labels[c.id] = f.topic_slug; });
+        });
+        allClips.forEach((c) => seenClipIdsRef.current.add(c.id));
         setClips(allClips);
         setTopicLabels(labels);
         setProcessing(feeds.some((f) => f.processing));
@@ -35,54 +48,194 @@ export default function FeedPage() {
         const feed = await getTopicFeed(topicSlug);
         setClips(feed.clips);
         setProcessing(feed.processing);
+        const labels: Record<string, string> = {};
+        feed.clips.forEach((c) => { labels[c.id] = topicSlug; });
+        setTopicLabels(labels);
       }
     } catch {
       // silently retry
     }
   }, [sessionId, topicSlug]);
 
+  const fetchMore = useCallback(async () => {
+    if (!sessionId || fetchingMoreRef.current) return;
+    fetchingMoreRef.current = true;
+    try {
+      const feeds: FeedResponse[] = await getPathFeed(sessionId);
+      const newClips = feeds.flatMap((f) => f.clips).filter((c) => !seenClipIdsRef.current.has(c.id));
+      if (newClips.length === 0) return;
+      const newLabels: Record<string, string> = {};
+      feeds.forEach((f) => {
+        f.clips.forEach((c) => { newLabels[c.id] = f.topic_slug; });
+      });
+      newClips.forEach((c) => seenClipIdsRef.current.add(c.id));
+      setClips((prev) => [...prev, ...newClips]);
+      setTopicLabels((prev) => ({ ...prev, ...newLabels }));
+    } catch {
+      // silently fail — user still has remaining clips
+    } finally {
+      fetchingMoreRef.current = false;
+    }
+  }, [sessionId]);
+
   useEffect(() => {
     loadFeed();
+    clipStartRef.current = Date.now();
   }, [loadFeed]);
 
-  // Poll while processing
   useEffect(() => {
     if (processing) {
+      setTimedOut(false);
       pollingRef.current = setInterval(loadFeed, POLL_INTERVAL_MS);
+      const timeout = setTimeout(() => {
+        clearInterval(pollingRef.current);
+        setTimedOut(true);
+        setProcessing(false);
+      }, 30000);
+      return () => { clearInterval(pollingRef.current); clearTimeout(timeout); };
     }
     return () => clearInterval(pollingRef.current);
   }, [processing, loadFeed]);
 
-  // Scroll snap: update activeIndex on scroll
+  activeIndexRef.current = activeIndex;
+
+  const goTo = useCallback((idx: number) => {
+    const clamped = Math.max(0, Math.min(clips.length - 1, idx));
+    if (clamped === activeIndexRef.current && idx >= 0 && idx < clips.length) return;
+
+    const leavingClip = clips[activeIndexRef.current];
+    if (leavingClip) {
+      const watchMs = Date.now() - clipStartRef.current;
+      const durationMs = (leavingClip.duration_seconds ?? 60) * 1000;
+      const visits = clipVisitsRef.current[leavingClip.id] ?? 1;
+      recordClipEvent(leavingClip.id, watchMs, watchMs >= durationMs * 0.8, sessionId, Math.max(0, visits - 1));
+    }
+
+    clipStartRef.current = Date.now();
+    const arrivingClip = clips[clamped];
+    if (arrivingClip) {
+      clipVisitsRef.current[arrivingClip.id] = (clipVisitsRef.current[arrivingClip.id] ?? 0) + 1;
+    }
+    const el = containerRef.current?.querySelectorAll("[data-index]")[clamped] as HTMLElement;
+    el?.scrollIntoView({ behavior: "smooth" });
+    setActiveIndex(clamped);
+  }, [clips, sessionId]);
+
+  // Wheel navigation (captures scroll events eaten by YouTube iframes)
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const handleWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      goTo(activeIndexRef.current + (e.deltaY > 0 ? 1 : -1));
+    };
+    container.addEventListener("wheel", handleWheel, { passive: false });
+    return () => container.removeEventListener("wheel", handleWheel);
+  }, [goTo]);
+
+  // Touch swipe navigation
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
 
-    const observer = new IntersectionObserver(
-      (entries) => {
-        entries.forEach((entry) => {
-          if (entry.isIntersecting) {
-            const idx = Number((entry.target as HTMLElement).dataset.index);
-            setActiveIndex(idx);
-          }
-        });
-      },
-      { threshold: 0.6, root: container }
-    );
+    const handleTouchStart = (e: TouchEvent) => {
+      touchStartY.current = e.touches[0].clientY;
+    };
+    const handleTouchEnd = (e: TouchEvent) => {
+      if (touchStartY.current === null) return;
+      const delta = touchStartY.current - e.changedTouches[0].clientY;
+      if (Math.abs(delta) > 40) {
+        goTo(activeIndexRef.current + (delta > 0 ? 1 : -1));
+      }
+      touchStartY.current = null;
+    };
 
-    const children = container.querySelectorAll("[data-index]");
-    children.forEach((el) => observer.observe(el));
-    return () => observer.disconnect();
-  }, [clips]);
+    container.addEventListener("touchstart", handleTouchStart, { passive: true });
+    container.addEventListener("touchend", handleTouchEnd, { passive: true });
+    return () => {
+      container.removeEventListener("touchstart", handleTouchStart);
+      container.removeEventListener("touchend", handleTouchEnd);
+    };
+  }, [goTo]);
+
+  // Keyboard navigation
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "ArrowDown") goTo(activeIndexRef.current + 1);
+      if (e.key === "ArrowUp") goTo(activeIndexRef.current - 1);
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [goTo]);
+
+  // Fetch more clips when 2 from the end (uses updated interest vector)
+  useEffect(() => {
+    if (sessionId && clips.length > 0 && activeIndex >= clips.length - 2) {
+      fetchMore();
+    }
+  }, [activeIndex, clips.length, sessionId, fetchMore]);
+
+  // Fetch recommendations when user reaches the last clip
+  useEffect(() => {
+    if (!sessionId || clips.length === 0 || activeIndex < clips.length - 1) return;
+    getRecommendations(sessionId).then(setRecommendations).catch(() => {});
+  }, [activeIndex, clips.length, sessionId]);
+
+  // Derive current topic name from active clip
+  const activeClip = clips[activeIndex];
+  const activeTopicSlug = activeClip ? (topicLabels[activeClip.id] ?? topicSlug ?? "") : "";
+  const activeTopicName = activeTopicSlug
+    .split("-")
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
 
   if (!sessionId && !topicSlug) {
     return (
       <div className="min-h-screen bg-black text-white flex items-center justify-center">
         <div className="text-center space-y-4">
           <p className="text-zinc-400">No topic selected.</p>
-          <button onClick={() => router.push("/")} className="text-white underline">
-            Go back
-          </button>
+          <button onClick={() => router.push("/")} className="text-white underline">Go back</button>
+        </div>
+      </div>
+    );
+  }
+
+  // No clips and timed out
+  if (timedOut && clips.length === 0) {
+    return (
+      <div className="fixed inset-0 bg-black flex flex-col items-center justify-center gap-5 text-white px-6">
+        <button
+          onClick={() => router.push("/")}
+          className="absolute top-4 left-4 text-zinc-500 hover:text-white text-sm transition"
+        >
+          ← Home
+        </button>
+        <p className="text-2xl font-semibold text-center">No clips found</p>
+        <p className="text-zinc-500 text-sm text-center">Try a different topic — we may not have content for this one yet.</p>
+        <button
+          onClick={() => router.push("/")}
+          className="bg-white text-black font-semibold px-6 py-3 rounded-2xl text-sm hover:bg-zinc-100 transition"
+        >
+          Try another topic →
+        </button>
+      </div>
+    );
+  }
+
+  // Pure loading (no clips at all yet)
+  if (processing && clips.length === 0) {
+    return (
+      <div className="fixed inset-0 bg-black flex flex-col items-center justify-center gap-5 text-white">
+        <button
+          onClick={() => router.push("/")}
+          className="absolute top-4 left-4 text-zinc-500 hover:text-white text-sm transition"
+        >
+          ← Home
+        </button>
+        <div className="w-12 h-12 border-2 border-zinc-700 border-t-white rounded-full animate-spin" />
+        <div className="text-center space-y-1">
+          <p className="text-white font-medium">Finding clips for you</p>
+          <p className="text-zinc-500 text-sm">Hang tight…</p>
         </div>
       </div>
     );
@@ -90,52 +243,120 @@ export default function FeedPage() {
 
   return (
     <div className="fixed inset-0 bg-black">
-      {/* Back button */}
-      <button
-        onClick={() => router.push("/")}
-        className="absolute top-4 left-4 z-20 text-white bg-black/40 backdrop-blur rounded-full px-3 py-1.5 text-sm"
-      >
-        ← Home
-      </button>
-
-      {processing && clips.length === 0 ? (
-        <div className="h-full flex flex-col items-center justify-center gap-4 text-white">
-          <div className="w-10 h-10 border-2 border-white border-t-transparent rounded-full animate-spin" />
-          <p className="text-zinc-400 text-sm">Finding and cutting clips for you…</p>
-        </div>
-      ) : (
-        <div
-          ref={containerRef}
-          className="h-full overflow-y-scroll snap-y snap-mandatory"
-          style={{ scrollbarWidth: "none" }}
+      {/* HUD */}
+      <div className="absolute top-0 inset-x-0 z-20 flex items-center justify-between px-4 pt-4 pb-2 pointer-events-none">
+        <button
+          onClick={() => router.push("/")}
+          className="pointer-events-auto text-white bg-black/40 backdrop-blur-sm rounded-full px-3 py-1.5 text-sm leading-none"
         >
-          {clips.map((clip, i) => (
-            <div
-              key={clip.id}
-              data-index={i}
-              className="h-screen w-full snap-start snap-always relative"
-            >
-              <ReelPlayer
-                clip={clip}
-                active={i === activeIndex}
-                onEnded={() => {
-                  if (i < clips.length - 1) {
-                    const next = containerRef.current?.querySelectorAll("[data-index]")[i + 1];
-                    next?.scrollIntoView({ behavior: "smooth" });
-                  }
-                }}
-              />
-            </div>
-          ))}
+          ← Home
+        </button>
 
-          {/* Load more trigger */}
-          {clips.length > 0 && (
-            <div className="h-screen w-full snap-start flex items-center justify-center bg-black">
-              <p className="text-zinc-500 text-sm">You've reached the end of this topic.</p>
-            </div>
+        {activeTopicName && (
+          <span className="text-white/70 text-xs font-medium tracking-wide max-w-[45%] truncate">
+            {activeTopicName}
+          </span>
+        )}
+
+        <span className="text-zinc-500 text-xs tabular-nums">
+          {clips.length > 0 ? `${activeIndex + 1} / ${clips.length}` : ""}
+          {processing && clips.length > 0 && (
+            <span className="ml-1 text-amber-400">•</span>
           )}
+        </span>
+      </div>
+
+      {/* Progress bar */}
+      {clips.length > 0 && (
+        <div className="absolute top-0 inset-x-0 z-30 h-0.5 bg-zinc-800">
+          <div
+            className="h-full bg-white transition-all duration-300"
+            style={{ width: `${((activeIndex + 1) / clips.length) * 100}%` }}
+          />
         </div>
       )}
+
+      {/* Clip scroll container */}
+      <div
+        ref={containerRef}
+        className="h-full overflow-y-scroll snap-y snap-mandatory"
+        style={{ scrollbarWidth: "none" }}
+      >
+        {clips.map((clip, i) => (
+          <div
+            key={clip.id}
+            data-index={i}
+            className="w-full snap-start snap-always relative"
+            style={{ height: "100dvh" }}
+          >
+            <ReelPlayer
+              clip={clip}
+              active={i === activeIndex}
+              onEnded={() => goTo(i + 1)}
+            />
+          </div>
+        ))}
+
+        {/* End card */}
+        {clips.length > 0 && !processing && (
+          <div className="snap-start snap-always" style={{ height: "100dvh" }}>
+            <div className="h-full flex flex-col items-center justify-center gap-5 bg-black text-white px-6">
+              <p className="text-2xl font-semibold text-center">You finished this topic.</p>
+              <p className="text-zinc-500 text-sm text-center">
+                You watched {clips.length} clip{clips.length !== 1 ? "s" : ""}.
+              </p>
+              {recommendations.length > 0 ? (
+                <>
+                  <p className="text-zinc-400 text-sm font-medium">What to learn next:</p>
+                  <div className="w-full max-w-sm space-y-3">
+                    {recommendations.map((rec) => (
+                      <button
+                        key={rec.slug}
+                        onClick={() => router.push(`/feed?topic=${rec.slug}`)}
+                        className="w-full text-left bg-zinc-900 border border-zinc-800 rounded-2xl px-4 py-3 hover:bg-zinc-800 active:scale-95 transition"
+                      >
+                        <p className="text-white font-semibold text-sm">{rec.name}</p>
+                        <p className="text-zinc-500 text-xs mt-0.5">{rec.clip_count} clips · {rec.difficulty}</p>
+                      </button>
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <button
+                  onClick={() => router.push("/")}
+                  className="bg-white text-black font-semibold px-6 py-3 rounded-2xl text-sm hover:bg-zinc-100 transition"
+                >
+                  Learn something new →
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Still loading more */}
+        {clips.length > 0 && processing && (
+          <div className="snap-start snap-always" style={{ height: "100dvh" }}>
+            <div className="h-full flex flex-col items-center justify-center gap-4 bg-black text-white">
+              <div className="w-8 h-8 border-2 border-zinc-700 border-t-white rounded-full animate-spin" />
+              <p className="text-zinc-500 text-sm">Loading more clips…</p>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
+  );
+}
+
+export default function FeedPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="fixed inset-0 bg-black flex items-center justify-center">
+          <div className="w-12 h-12 border-2 border-zinc-700 border-t-white rounded-full animate-spin" />
+        </div>
+      }
+    >
+      <FeedContent />
+    </Suspense>
   );
 }

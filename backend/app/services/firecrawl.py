@@ -1,65 +1,64 @@
 import os
-from firecrawl import FirecrawlApp
+import urllib.parse
+import yt_dlp
 
-_app: FirecrawlApp | None = None
-
-EDUCATIONAL_SITES = [
-    "khanacademy.org",
-    "youtube.com",
-    "mit.edu",
-    "coursera.org",
-]
+COOKIES_PATH = os.getenv("YOUTUBE_COOKIES_PATH", "cookies.txt")
 
 
-def get_app() -> FirecrawlApp:
-    global _app
-    if _app is None:
-        _app = FirecrawlApp(api_key=os.environ["FIRECRAWL_API_KEY"])
-    return _app
-
-
-def search_videos(topic_name: str, max_results: int = 10) -> list[dict]:
-    app = get_app()
-    site_filter = " OR ".join(f"site:{s}" for s in EDUCATIONAL_SITES)
-    query = f"{topic_name} tutorial explained ({site_filter})"
-
-    results = app.search(query, limit=max_results)
-    videos = []
-
-    for r in results.get("data", []):
-        url = r.get("url", "")
-        # Only keep video URLs
-        if any(
-            pat in url
-            for pat in ["youtube.com/watch", "khanacademy.org/", "youtu.be/"]
-        ):
-            videos.append(
-                {
-                    "url": url,
-                    "title": r.get("title", ""),
-                    "description": r.get("description", ""),
-                    "platform": _detect_platform(url),
-                }
-            )
-
-    return videos
-
-
-def scrape_page(url: str) -> dict:
-    app = get_app()
-    result = app.scrape_url(url, formats=["markdown"])
-    return {
-        "url": url,
-        "content": result.get("markdown", ""),
-        "metadata": result.get("metadata", {}),
+def _ydl_opts(max_results: int) -> dict:
+    opts = {
+        "quiet": True,
+        "extract_flat": True,
+        "no_warnings": True,
+        "skip_download": True,
+        "playlistend": max_results,
     }
+    if os.path.exists(COOKIES_PATH):
+        opts["cookiefile"] = COOKIES_PATH
+    return opts
 
 
-def _detect_platform(url: str) -> str:
-    if "youtube.com" in url or "youtu.be" in url:
-        return "youtube"
-    if "khanacademy.org" in url:
-        return "khan_academy"
-    if "mit.edu" in url:
-        return "mit_ocw"
-    return "other"
+def search_khan_academy(topic_name: str, max_results: int = 4) -> list[dict]:
+    """Search within Khan Academy's YouTube channel. Metadata-only — no transcript fetching."""
+    encoded = urllib.parse.quote(topic_name)
+    url = f"https://www.youtube.com/@khanacademy/search?query={encoded}"
+    try:
+        with yt_dlp.YoutubeDL(_ydl_opts(max_results)) as ydl:
+            result = ydl.extract_info(url, download=False)
+        videos = []
+        for entry in (result.get("entries") or [])[:max_results]:
+            if not entry:
+                continue
+            video_id = entry.get("id")
+            if not video_id:
+                continue
+            videos.append({
+                "url": f"https://www.youtube.com/watch?v={video_id}",
+                "title": entry.get("title", ""),
+                "description": entry.get("description", ""),
+                "platform": "khan_academy",
+            })
+        return videos
+    except Exception:
+        query = f"ytsearch{max_results}:{topic_name} Khan Academy"
+        return _yt_search(query, max_results)
+
+
+def _yt_search(query: str, max_results: int) -> list[dict]:
+    with yt_dlp.YoutubeDL(_ydl_opts(max_results)) as ydl:
+        result = ydl.extract_info(query, download=False)
+
+    videos = []
+    for entry in (result.get("entries") or [])[:max_results]:
+        if not entry:
+            continue
+        video_id = entry.get("id")
+        if not video_id:
+            continue
+        videos.append({
+            "url": f"https://www.youtube.com/watch?v={video_id}",
+            "title": entry.get("title", ""),
+            "description": entry.get("description", ""),
+            "platform": "khan_academy",
+        })
+    return videos

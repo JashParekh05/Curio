@@ -39,8 +39,22 @@ CREATE TABLE IF NOT EXISTS clips (
     transcript TEXT,
     source_url TEXT,
     source_platform TEXT,
+    hook_score FLOAT DEFAULT 0.5,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Run this if clips table already exists (one-time migration):
+-- ALTER TABLE clips ADD COLUMN IF NOT EXISTS hook_score FLOAT DEFAULT 0.5;
+
+CREATE TABLE IF NOT EXISTS clip_events (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    clip_id UUID REFERENCES clips(id) ON DELETE CASCADE,
+    session_id TEXT,
+    watch_ms INTEGER NOT NULL,
+    completed BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS events_clip_idx ON clip_events(clip_id);
 
 CREATE TABLE IF NOT EXISTS learning_paths (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
