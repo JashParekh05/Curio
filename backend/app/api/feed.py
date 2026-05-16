@@ -412,8 +412,8 @@ async def record_clip_event(clip_id: str, event: ClipEvent):
             "completed": event.completed,
             "replay_count": event.replay_count,
         }).execute()
-    except Exception:
-        logger.warning(f"Failed to record event for clip {clip_id}")
+    except Exception as e:
+        logger.warning(f"Failed to record event for clip {clip_id}: {e}")
         return
 
     if event.session_id:
