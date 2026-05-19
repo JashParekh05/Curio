@@ -73,6 +73,12 @@ export default function OnboardingPage() {
           })}
         </div>
 
+        {selected.size > 0 && selected.size < 3 && (
+          <p className="text-center text-zinc-500 text-sm -mt-4">
+            Pick {3 - selected.size} more to continue
+          </p>
+        )}
+
         <button
           onClick={handleContinue}
           disabled={selected.size < 3 || saving}

@@ -21,6 +21,7 @@ function FeedContent() {
   const [processing, setProcessing] = useState(false);
   const [topicLabels, setTopicLabels] = useState<Record<string, string>>({});
   const [timedOut, setTimedOut] = useState(false);
+  const [loadError, setLoadError] = useState(false);
   const [recommendations, setRecommendations] = useState<TopicRecommendation[]>([]);
 
   const containerRef = useRef<HTMLDivElement>(null);
@@ -51,16 +52,18 @@ function FeedContent() {
         setClips(allClips);
         setTopicLabels(labels);
         setProcessing(feeds.some((f) => f.processing));
+        setLoadError(false);
       } else if (topicSlug) {
         const feed = await getTopicFeed(topicSlug);
         setClips(feed.clips);
         setProcessing(feed.processing);
+        setLoadError(false);
         const labels: Record<string, string> = {};
         feed.clips.forEach((c) => { labels[c.id] = topicSlug; });
         setTopicLabels(labels);
       }
     } catch {
-      // silently retry
+      setLoadError(true);
     }
   }, [sessionId, topicSlug]);
 
@@ -113,9 +116,11 @@ function FeedContent() {
     if (target === 0) { initialScrollDoneRef.current = true; return; }
     if (clips.length > target) {
       initialScrollDoneRef.current = true;
-      const el = containerRef.current?.querySelectorAll("[data-index]")[target] as HTMLElement;
-      el?.scrollIntoView({ behavior: "instant" });
-      setActiveIndex(target);
+      requestAnimationFrame(() => {
+        const el = containerRef.current?.querySelectorAll("[data-index]")[target] as HTMLElement;
+        el?.scrollIntoView({ behavior: "instant" });
+        setActiveIndex(target);
+      });
     }
   }, [clips.length]);
 
@@ -232,6 +237,25 @@ function FeedContent() {
           <p className="text-zinc-400">No topic selected.</p>
           <button onClick={() => router.push("/")} className="text-white underline">Go back</button>
         </div>
+      </div>
+    );
+  }
+
+  // Network/load error with no clips
+  if (loadError && clips.length === 0) {
+    return (
+      <div className="fixed inset-0 bg-black flex flex-col items-center justify-center gap-5 text-white px-6">
+        <button onClick={() => router.push("/")} className="absolute top-4 left-4 text-zinc-500 hover:text-white text-sm transition">
+          ← Home
+        </button>
+        <p className="text-2xl font-semibold text-center">Couldn't load clips</p>
+        <p className="text-zinc-500 text-sm text-center">Check that the backend is running.</p>
+        <button
+          onClick={() => { setLoadError(false); loadFeed(); }}
+          className="bg-white text-black font-semibold px-6 py-3 rounded-2xl text-sm hover:bg-zinc-100 transition"
+        >
+          Retry
+        </button>
       </div>
     );
   }

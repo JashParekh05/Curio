@@ -12,6 +12,7 @@ export default function DiscoverPage() {
   const [clips, setClips] = useState<Clip[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
   const [fetching, setFetching] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const activeIndexRef = useRef(0);
@@ -154,6 +155,19 @@ export default function DiscoverPage() {
               className="bg-white text-black font-semibold px-6 py-3 rounded-2xl text-sm hover:bg-zinc-100 transition"
             >
               Learn something specific →
+            </button>
+            <button
+              disabled={loadingMore}
+              onClick={() => {
+                if (!user || loadingMore) return;
+                setLoadingMore(true);
+                getDiscoverFeed(user.id)
+                  .then((more) => setClips((prev) => [...prev, ...more]))
+                  .finally(() => setLoadingMore(false));
+              }}
+              className="text-zinc-500 text-sm hover:text-white transition disabled:opacity-40"
+            >
+              {loadingMore ? "Loading…" : "Load more clips"}
             </button>
           </div>
         </div>
