@@ -61,6 +61,7 @@ export default function ReelPlayer({ clip, active, onEnded, onFeedback }: Props)
   const videoRef = useRef<HTMLVideoElement>(null);
   const [showCaption, setShowCaption] = useState(true);
   const [clipExpired, setClipExpired] = useState(false);
+  const [videoError, setVideoError] = useState(false);
   const [feedback, setFeedback] = useState<"want_more" | "already_know" | null>(null);
 
   const isYT = isYouTubeEmbed(clip.video_url);
@@ -69,6 +70,7 @@ export default function ReelPlayer({ clip, active, onEnded, onFeedback }: Props)
   // Reset state when clip changes
   useEffect(() => {
     setClipExpired(false);
+    setVideoError(false);
     setFeedback(null);
   }, [clip.id]);
 
@@ -109,12 +111,26 @@ export default function ReelPlayer({ clip, active, onEnded, onFeedback }: Props)
           className="absolute inset-0 w-full h-full object-cover"
           playsInline
           onEnded={onEnded}
+          onError={() => setVideoError(true)}
           preload="auto"
         />
       )}
 
       {/* Gradient overlays */}
       <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/10 to-black/30 pointer-events-none" />
+
+      {/* Native video load error */}
+      {videoError && (
+        <div className="absolute inset-0 bg-black/80 flex flex-col items-center justify-center gap-3 z-10">
+          <p className="text-zinc-400 text-sm">Couldn&apos;t load video</p>
+          <button
+            onClick={onEnded}
+            className="bg-white/10 text-white text-sm px-4 py-2 rounded-xl hover:bg-white/20 transition"
+          >
+            Skip →
+          </button>
+        </div>
+      )}
 
       {/* Clip expired overlay for YouTube (end timestamp) */}
       {clipExpired && (

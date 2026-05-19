@@ -147,13 +147,7 @@ def _identify_segments(transcript: list[dict], topic_slug: str) -> list[dict]:
     ]
 
     client = get_groq()
-    response = client.chat.completions.create(
-        model=MODEL,
-        max_tokens=2048,
-        messages=[
-            {
-                "role": "user",
-                "content": f"""You are cutting an educational video about "{topic_slug}" into short reels optimized for viewer retention (TikTok-style).
+    prompt = f"""You are cutting an educational video about "{topic_slug}" into short reels optimized for viewer retention (TikTok-style).
 
 CRITICAL RULE: Every segment MUST open with a hook — the very first words of the segment should grab attention. Strong hooks are:
 - A surprising or counterintuitive claim: "Most people believe X, but actually..."
@@ -180,10 +174,17 @@ Return a JSON array only, no other text:
     "transcript": "the text spoken in this segment",
     "hook_score": 0.85
   }}
-]""",
-            }
-        ],
-    )
+]"""
+
+    try:
+        response = client.chat.completions.create(
+            model=MODEL,
+            max_tokens=2048,
+            messages=[{"role": "user", "content": prompt}],
+        )
+    except Exception as e:
+        logger.error(f"[pipeline] Groq segmentation API call failed for topic={topic_slug}: {e}")
+        return []
 
     raw = response.choices[0].message.content.strip()
     if "```" in raw:
@@ -191,7 +192,12 @@ Return a JSON array only, no other text:
         if raw.startswith("json"):
             raw = raw[4:]
 
-    segments = json.loads(raw.strip())
+    try:
+        segments = json.loads(raw.strip())
+    except json.JSONDecodeError as e:
+        logger.error(f"[pipeline] Failed to parse segmentation JSON for topic={topic_slug}: {e} | raw={raw[:200]}")
+        return []
+
     for seg in segments:
         seg.setdefault("hook_score", 0.5)
         seg["hook_score"] = max(0.0, min(1.0, float(seg["hook_score"])))

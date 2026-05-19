@@ -1,9 +1,12 @@
 import os
 import json
 import uuid
+import logging
 from pathlib import Path
 from groq import Groq
 from app.models.schemas import Topic, LearningPath
+
+logger = logging.getLogger(__name__)
 
 _client: Groq | None = None
 _curated_cache: list[dict] | None = None
@@ -73,31 +76,48 @@ def parse_learning_path(query: str, session_id: str | None = None) -> LearningPa
         if curated else ""
     )
 
-    response = client.chat.completions.create(
-        model=MODEL,
-        max_tokens=1024,
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {
-                "role": "user",
-                "content": f"User wants to learn: {query}{curated_block}\n\nReturn JSON matching this schema:\n{TOPIC_SCHEMA}",
-            },
-        ],
-    )
+    logger.info(f"[LLM] Generating learning path for query='{query[:80]}'")
+    try:
+        response = client.chat.completions.create(
+            model=MODEL,
+            max_tokens=1024,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {
+                    "role": "user",
+                    "content": f"User wants to learn: {query}{curated_block}\n\nReturn JSON matching this schema:\n{TOPIC_SCHEMA}",
+                },
+            ],
+        )
+    except Exception as e:
+        logger.error(f"[LLM] Groq API call failed for query='{query[:80]}': {e}")
+        raise
 
     raw = response.choices[0].message.content
+    logger.debug(f"[LLM] Raw response length={len(raw)}")
+
     # Strip markdown code fences if present
     if "```" in raw:
         raw = raw.split("```")[1]
         if raw.startswith("json"):
             raw = raw[4:]
 
-    data = json.loads(raw.strip())
+    try:
+        data = json.loads(raw.strip())
+    except json.JSONDecodeError as e:
+        logger.error(f"[LLM] Failed to parse JSON response: {e} | raw={raw[:200]}")
+        raise
 
-    topics = [Topic(**t) for t in data["topics"]]
+    try:
+        topics = [Topic(**t) for t in data["topics"]]
+    except (KeyError, TypeError) as e:
+        logger.error(f"[LLM] Unexpected response shape: {e} | keys={list(data.keys())}")
+        raise
+
+    logger.info(f"[LLM] Generated {len(topics)} topics for session={sid}")
     return LearningPath(
         session_id=sid,
         user_query=query,
         topics=topics,
-        summary=data["summary"],
+        summary=data.get("summary", ""),
     )

@@ -109,11 +109,12 @@ export async function getUserProfile(userId: string): Promise<UserProfile> {
 }
 
 export async function setUserInterests(userId: string, interests: string[]): Promise<void> {
-  await fetch(`${API_BASE}/api/users/${encodeURIComponent(userId)}/interests`, {
+  const res = await fetch(`${API_BASE}/api/users/${encodeURIComponent(userId)}/interests`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ interests }),
   });
+  if (!res.ok) throw new Error(`Failed to save interests: ${res.status}`);
 }
 
 export async function getDiscoverFeed(userId: string): Promise<Clip[]> {

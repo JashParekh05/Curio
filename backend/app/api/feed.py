@@ -34,12 +34,16 @@ def _parse_vector(v) -> list[float] | None:
 
 def _get_session_telemetry(db, session_id: str) -> tuple[set[str], dict[str, float]]:
     """Returns (seen_clip_ids, topic_completion_rates)."""
-    events = (
-        db.table("clip_events")
-        .select("clip_id, watch_ms, completed")
-        .eq("session_id", session_id)
-        .execute()
-    )
+    try:
+        events = (
+            db.table("clip_events")
+            .select("clip_id, watch_ms, completed")
+            .eq("session_id", session_id)
+            .execute()
+        )
+    except Exception as e:
+        logger.warning(f"[feed] Failed to fetch telemetry for session={session_id}: {e}")
+        return set(), {}
 
     seen_ids: set[str] = set()
     topic_watches: dict[str, list[bool]] = {}
@@ -104,7 +108,10 @@ def _update_interest_vector(db, session_id: str, topic_slug: str, completed: boo
     if new_taste is not None:
         upsert_data["taste_vector"] = new_taste
 
-    db.table("session_embeddings").upsert(upsert_data).execute()
+    try:
+        db.table("session_embeddings").upsert(upsert_data).execute()
+    except Exception as e:
+        logger.warning(f"[feed] Failed to upsert session_embeddings for session={session_id}: {e}")
 
     # Merge into user-level profile for cross-session persistence
     if user_id:
@@ -138,12 +145,16 @@ def _get_clip_population_stats(db, clip_ids: list[str]) -> dict[str, float]:
     """Population-level completion rate per clip across all sessions."""
     if not clip_ids:
         return {}
-    rows = (
-        db.table("clip_events")
-        .select("clip_id, completed")
-        .in_("clip_id", clip_ids)
-        .execute()
-    )
+    try:
+        rows = (
+            db.table("clip_events")
+            .select("clip_id, completed")
+            .in_("clip_id", clip_ids)
+            .execute()
+        )
+    except Exception as e:
+        logger.warning(f"[feed] Failed to fetch population stats for {len(clip_ids)} clips: {e}")
+        return {}
     totals: dict[str, list[bool]] = {}
     for r in rows.data:
         totals.setdefault(r["clip_id"], []).append(bool(r["completed"]))
@@ -277,14 +288,18 @@ def _fetch_clips_for_slug(
     interest_vector: dict[str, float] | None = None,
     taste_vector: list[float] | None = None,
 ) -> list[Clip]:
-    result = (
-        db.table("clips")
-        .select("*")
-        .eq("topic_slug", slug)
-        .order("created_at", desc=False)
-        .limit(limit)
-        .execute()
-    )
+    try:
+        result = (
+            db.table("clips")
+            .select("*")
+            .eq("topic_slug", slug)
+            .order("created_at", desc=False)
+            .limit(limit)
+            .execute()
+        )
+    except Exception as e:
+        logger.warning(f"[feed] Failed to fetch clips for slug={slug}: {e}")
+        return []
     clips = []
     for row in result.data:
         if seen_ids and row["id"] in seen_ids:
@@ -305,13 +320,17 @@ def _fetch_clips_for_slug(
 @router.get("/path/{session_id}", response_model=list[FeedResponse])
 async def get_path_feed(session_id: str):
     db = get_client()
-    path = (
-        db.table("learning_paths")
-        .select("topic_slugs, user_query")
-        .eq("session_id", session_id)
-        .limit(1)
-        .execute()
-    )
+    try:
+        path = (
+            db.table("learning_paths")
+            .select("topic_slugs, user_query")
+            .eq("session_id", session_id)
+            .limit(1)
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"[feed] Failed to fetch learning_path for session={session_id}: {e}")
+        return []
     if not path.data:
         return []
 
@@ -319,27 +338,36 @@ async def get_path_feed(session_id: str):
     seen_ids, topic_completion = _get_session_telemetry(db, session_id)
 
     # User's typical engagement length from completed clips
-    watch_rows = (
-        db.table("clip_events")
-        .select("watch_ms")
-        .eq("session_id", session_id)
-        .eq("completed", True)
-        .limit(20)
-        .execute()
-    )
-    user_avg_watch_seconds = (
-        sum(r["watch_ms"] for r in watch_rows.data) / len(watch_rows.data) / 1000
-        if watch_rows.data else None
-    )
+    try:
+        watch_rows = (
+            db.table("clip_events")
+            .select("watch_ms")
+            .eq("session_id", session_id)
+            .eq("completed", True)
+            .limit(20)
+            .execute()
+        )
+        user_avg_watch_seconds = (
+            sum(r["watch_ms"] for r in watch_rows.data) / len(watch_rows.data) / 1000
+            if watch_rows.data else None
+        )
+    except Exception as e:
+        logger.warning(f"[feed] Failed to fetch watch_ms for session={session_id}: {e}")
+        user_avg_watch_seconds = None
 
     # Live interest vector + taste vector for personalized re-ranking
-    iv_res = (
-        db.table("session_embeddings")
-        .select("interest_vector, taste_vector")
-        .eq("session_id", session_id)
-        .limit(1)
-        .execute()
-    )
+    try:
+        iv_res = (
+            db.table("session_embeddings")
+            .select("interest_vector, taste_vector")
+            .eq("session_id", session_id)
+            .limit(1)
+            .execute()
+        )
+    except Exception as e:
+        logger.warning(f"[feed] Failed to fetch session_embeddings for session={session_id}: {e}")
+        iv_res = type("R", (), {"data": []})()
+
     if iv_res.data:
         iv_row = iv_res.data[0]
         interest_vector: dict[str, float] = iv_row.get("interest_vector") or {}
@@ -348,10 +376,18 @@ async def get_path_feed(session_id: str):
         # New session — seed from user-level profile
         interest_vector = {}
         taste_vector = None
-        path_user = db.table("learning_paths").select("user_id").eq("session_id", session_id).limit(1).execute()
+        try:
+            path_user = db.table("learning_paths").select("user_id").eq("session_id", session_id).limit(1).execute()
+        except Exception as e:
+            logger.warning(f"[feed] Failed to fetch user_id for session={session_id}: {e}")
+            path_user = type("R", (), {"data": []})()
         if path_user.data and path_user.data[0].get("user_id"):
             uid = path_user.data[0]["user_id"]
-            up = db.table("user_profiles").select("taste_vector, interest_vector").eq("user_id", uid).limit(1).execute()
+            try:
+                up = db.table("user_profiles").select("taste_vector, interest_vector").eq("user_id", uid).limit(1).execute()
+            except Exception as e:
+                logger.warning(f"[feed] Failed to fetch user_profiles for user={uid}: {e}")
+                up = type("R", (), {"data": []})()
             if up.data:
                 interest_vector = up.data[0].get("interest_vector") or {}
                 taste_vector = _parse_vector(up.data[0].get("taste_vector"))
@@ -403,13 +439,17 @@ async def get_path_feed(session_id: str):
 @router.get("/recommendations/{session_id}", response_model=list[TopicRecommendation])
 async def get_recommendations(session_id: str):
     db = get_client()
-    path = (
-        db.table("learning_paths")
-        .select("topic_slugs")
-        .eq("session_id", session_id)
-        .limit(1)
-        .execute()
-    )
+    try:
+        path = (
+            db.table("learning_paths")
+            .select("topic_slugs")
+            .eq("session_id", session_id)
+            .limit(1)
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"[feed] Failed to fetch learning_path for recommendations session={session_id}: {e}")
+        return []
     if not path.data:
         return []
     path_slugs = path.data[0]["topic_slugs"]
@@ -425,14 +465,18 @@ async def get_feed(
     limit: int = Query(10, ge=1, le=50),
 ):
     db = get_client()
-    result = (
-        db.table("clips")
-        .select("*")
-        .eq("topic_slug", topic_slug)
-        .order("created_at", desc=False)
-        .range(offset, offset + limit - 1)
-        .execute()
-    )
+    try:
+        result = (
+            db.table("clips")
+            .select("*")
+            .eq("topic_slug", topic_slug)
+            .order("created_at", desc=False)
+            .range(offset, offset + limit - 1)
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"[feed] Failed to fetch clips for slug={topic_slug}: {e}")
+        return FeedResponse(topic_slug=topic_slug, clips=[], processing=True)
     clips = []
     for row in result.data:
         row.setdefault("hook_score", 0.5)
@@ -492,7 +536,11 @@ def _fetch_discover_clips(
 
     # Relevant clips first
     for slug in relevant_slugs[:5]:
-        result = db.table("clips").select("*").eq("topic_slug", slug).limit(6).execute()
+        try:
+            result = db.table("clips").select("*").eq("topic_slug", slug).limit(6).execute()
+        except Exception as e:
+            logger.warning(f"[feed] Failed to fetch discover clips for slug={slug}: {e}")
+            continue
         for row in result.data:
             if row["id"] not in seen_ids and len(clips) < relevant_limit:
                 row.setdefault("hook_score", 0.5)
@@ -502,7 +550,11 @@ def _fetch_discover_clips(
     other_slugs = [s for s in all_slugs if s not in relevant_slugs]
     random.shuffle(other_slugs)
     for slug in other_slugs[:8]:
-        result = db.table("clips").select("*").eq("topic_slug", slug).limit(3).execute()
+        try:
+            result = db.table("clips").select("*").eq("topic_slug", slug).limit(3).execute()
+        except Exception as e:
+            logger.warning(f"[feed] Failed to fetch discover clips for slug={slug}: {e}")
+            continue
         for row in result.data:
             if row["id"] not in seen_ids and len(clips) < limit:
                 row.setdefault("hook_score", 0.5)
@@ -520,22 +572,33 @@ async def get_discover_feed(user_id: str, limit: int = Query(20, le=50)):
     db = get_client()
 
     # Single query: user profile with accumulated vectors
-    profile = db.table("user_profiles").select("interests, taste_vector, interest_vector").eq("user_id", user_id).limit(1).execute()
-    p = profile.data[0] if profile.data else {}
+    try:
+        profile = db.table("user_profiles").select("interests, taste_vector, interest_vector").eq("user_id", user_id).limit(1).execute()
+        p = profile.data[0] if profile.data else {}
+    except Exception as e:
+        logger.warning(f"[feed] Failed to fetch user_profiles for user={user_id}: {e}")
+        p = {}
     interests: list[str] = p.get("interests") or []
     taste_vector = _parse_vector(p.get("taste_vector"))
     user_interest_vector: dict[str, float] = p.get("interest_vector") or {}
 
     # Build seen_ids from all sessions — single batched query
-    paths = db.table("learning_paths").select("session_id").eq("user_id", user_id).execute()
-    session_ids = [p["session_id"] for p in paths.data]
     seen_ids: set[str] = set()
-    if session_ids:
-        events = db.table("clip_events").select("clip_id").in_("session_id", session_ids).execute()
-        seen_ids = {e["clip_id"] for e in events.data}
+    try:
+        paths = db.table("learning_paths").select("session_id").eq("user_id", user_id).execute()
+        session_ids = [r["session_id"] for r in paths.data]
+        if session_ids:
+            events = db.table("clip_events").select("clip_id").in_("session_id", session_ids).execute()
+            seen_ids = {e["clip_id"] for e in events.data}
+    except Exception as e:
+        logger.warning(f"[feed] Failed to build seen_ids for user={user_id}: {e}")
 
-    all_topics = db.table("topics").select("slug").execute()
-    all_slugs = [t["slug"] for t in all_topics.data]
+    try:
+        all_topics = db.table("topics").select("slug").execute()
+        all_slugs = [t["slug"] for t in all_topics.data]
+    except Exception as e:
+        logger.error(f"[feed] Failed to fetch topics for discover user={user_id}: {e}")
+        return []
     relevant_slugs = _match_interest_slugs(interests, all_slugs, taste_vector=taste_vector)
 
     return _fetch_discover_clips(db, relevant_slugs, all_slugs, seen_ids, limit, interest_vector=user_interest_vector, taste_vector=taste_vector)
@@ -557,11 +620,19 @@ async def record_clip_event(clip_id: str, event: ClipEvent):
         return
 
     if event.session_id:
-        clip = db.table("clips").select("topic_slug, embedding").eq("id", clip_id).limit(1).execute()
+        try:
+            clip = db.table("clips").select("topic_slug, embedding").eq("id", clip_id).limit(1).execute()
+        except Exception as e:
+            logger.warning(f"[feed] Failed to fetch clip {clip_id} for event: {e}")
+            return
         if clip.data:
             raw_emb = _parse_vector(clip.data[0].get("embedding"))
-            path = db.table("learning_paths").select("user_id").eq("session_id", event.session_id).limit(1).execute()
-            user_id = path.data[0].get("user_id") if path.data else None
+            try:
+                path = db.table("learning_paths").select("user_id").eq("session_id", event.session_id).limit(1).execute()
+                user_id = path.data[0].get("user_id") if path.data else None
+            except Exception as e:
+                logger.warning(f"[feed] Failed to fetch user_id for session={event.session_id}: {e}")
+                user_id = None
             _update_interest_vector(
                 db, event.session_id, clip.data[0]["topic_slug"],
                 event.completed, event.replay_count, event.feedback,
