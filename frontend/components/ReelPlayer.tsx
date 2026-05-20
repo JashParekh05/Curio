@@ -31,7 +31,6 @@ function sanitizeYTUrl(url: string): string {
 export default function ReelPlayer({ clip, active, onEnded, onFeedback }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
-  const [clipExpired, setClipExpired] = useState(false);
   const [videoError, setVideoError] = useState(false);
   const [feedback, setFeedback] = useState<"want_more" | "already_know" | null>(null);
   const [controlsVisible, setControlsVisible] = useState(true);
@@ -53,7 +52,6 @@ export default function ReelPlayer({ clip, active, onEnded, onFeedback }: Props)
   const isYT = isYouTubeEmbed(clip.video_url);
 
   useEffect(() => {
-    setClipExpired(false);
     setVideoError(false);
     setFeedback(null);
   }, [clip.id]);
@@ -77,20 +75,6 @@ export default function ReelPlayer({ clip, active, onEnded, onFeedback }: Props)
       "*"
     );
   }, [active, isYT]);
-
-  // YouTube ended detection via postMessage
-  useEffect(() => {
-    if (!isYT || !active) return;
-    setClipExpired(false);
-    function onMessage(e: MessageEvent) {
-      try {
-        const data = typeof e.data === "string" ? JSON.parse(e.data) : e.data;
-        if (data?.event === "onStateChange" && data?.info === 0) setClipExpired(true);
-      } catch { /* ignore non-JSON */ }
-    }
-    window.addEventListener("message", onMessage);
-    return () => window.removeEventListener("message", onMessage);
-  }, [active, isYT, clip.id]);
 
   return (
     <div
@@ -129,18 +113,6 @@ export default function ReelPlayer({ clip, active, onEnded, onFeedback }: Props)
             className="bg-white/10 text-white text-sm px-4 py-2 rounded-xl hover:bg-white/20 transition"
           >
             Skip →
-          </button>
-        </div>
-      )}
-
-      {/* YouTube clip ended */}
-      {clipExpired && (
-        <div className="absolute inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-10">
-          <button
-            onClick={onEnded}
-            className="bg-white text-black font-semibold px-6 py-3 rounded-2xl text-sm hover:bg-zinc-100 active:scale-95 transition"
-          >
-            Next clip →
           </button>
         </div>
       )}
