@@ -728,37 +728,78 @@ def _fetch_discover_clips(
     return _spread_by_source(clips[:limit])
 
 
-_INTEREST_TOPIC_SEEDS: dict[str, list[str]] = {
-    "science": ["scientific-method", "physics-motion", "chemistry-atoms", "energy-and-work", "waves-and-sound"],
-    "history": ["ancient-civilizations", "world-war-ii", "american-revolution", "renaissance", "cold-war-history"],
-    "math": ["algebra-basics", "geometry-fundamentals", "statistics-intro", "probability-basics", "number-theory"],
-    "technology": ["how-computers-work", "internet-basics", "programming-intro", "cybersecurity-basics", "ai-intro"],
-    "space": ["solar-system", "stars-and-galaxies", "black-holes", "space-exploration", "cosmology-basics"],
-    "biology": ["biology-cells", "dna-and-genetics", "evolution-basics", "human-body-systems", "ecology-basics"],
-    "philosophy": ["critical-thinking-basics", "logic-and-reasoning", "ethics-intro", "philosophy-of-mind", "epistemology"],
-    "economics": ["supply-and-demand", "microeconomics-basics", "personal-finance-basics", "market-structures", "macroeconomics-intro"],
-    "engineering": ["engineering-design", "mechanics-basics", "electrical-circuits", "materials-science", "structural-engineering"],
-    "art": ["color-theory", "drawing-fundamentals", "art-history-intro", "design-principles", "composition-basics"],
-    "psychology": ["psychology-intro", "cognitive-psychology", "behavioral-psychology", "developmental-psychology", "social-psychology"],
-    "language": ["linguistics-intro", "language-acquisition", "grammar-fundamentals", "phonetics-basics", "writing-skills"],
+GRADE_LEVEL_TOPIC_MAP: dict[str, dict[str, list[str]]] = {
+    "elementary_school": {
+        "math": ["addition-subtraction", "multiplication-division", "place-value", "basic-fractions", "shapes-patterns"],
+        "science": ["plants-animals", "weather-seasons", "simple-machines", "states-of-matter", "solar-system-basics"],
+        "history": ["community-helpers", "native-american-history", "early-explorers", "ancient-civilizations-intro", "american-symbols"],
+        "technology": ["computer-basics", "internet-safety", "typing-skills", "coding-blocks", "digital-citizenship"],
+        "english_language_arts": ["phonics", "reading-comprehension", "story-elements", "vocabulary-building", "basic-grammar"],
+        "arts": ["color-theory-basics", "drawing-basics", "music-rhythm", "crafts", "famous-artists-intro"],
+        "life_skills": ["emotions", "friendship", "healthy-habits", "time-management-basics", "classroom-behavior"],
+        "world_languages": ["spanish-basics", "french-basics", "greetings", "numbers-colors", "family-words"],
+    },
+    "middle_school": {
+        "math": ["fractions", "ratios", "pre-algebra", "geometry-basics", "probability"],
+        "science": ["cells", "ecosystems", "weather", "forces-motion", "earth-science"],
+        "history": ["american-revolution", "ancient-egypt", "roman-empire", "middle-ages", "early-american-history"],
+        "technology": ["internet-basics", "coding-intro", "scratch", "digital-research", "cybersecurity-basics"],
+        "english_language_arts": ["essay-writing", "theme-analysis", "figurative-language", "grammar-punctuation", "argument-writing"],
+        "arts": ["drawing-techniques", "music-theory-basics", "theater-intro", "art-history-basics", "creative-design"],
+        "life_skills": ["study-skills", "organization", "conflict-resolution", "goal-setting", "media-literacy"],
+        "world_languages": ["spanish-grammar-intro", "french-grammar-intro", "basic-conversation", "food-travel-vocabulary", "culture-intro"],
+    },
+    "high_school": {
+        "math": ["algebra-2", "calculus-intro", "statistics", "trigonometry", "geometry-proofs"],
+        "science": ["chemistry", "physics-mechanics", "biology", "environmental-science", "anatomy-physiology"],
+        "history": ["ww2", "civil-war", "cold-war", "world-history", "us-government"],
+        "technology": ["python-intro", "web-dev", "app-design", "databases-intro", "cybersecurity"],
+        "english_language_arts": ["literary-analysis", "research-papers", "sat-vocabulary", "rhetorical-analysis", "creative-writing"],
+        "arts": ["graphic-design", "photography", "music-composition", "film-analysis", "portfolio-building"],
+        "life_skills": ["financial-literacy", "college-readiness", "career-exploration", "public-speaking", "mental-health-awareness"],
+        "world_languages": ["spanish-conversation", "french-conversation", "grammar-intermediate", "literature-intro", "cultural-studies"],
+    },
+    "college": {
+        "math": ["linear-algebra", "calc-3", "differential-equations", "discrete-math", "probability-theory"],
+        "science": ["thermodynamics", "quantum-mechanics", "organic-chemistry", "molecular-biology", "geology"],
+        "history": ["federalist-papers", "industrial-revolution", "modern-europe", "postcolonial-history", "constitutional-history"],
+        "technology": ["data-structures", "machine-learning", "systems-programming", "software-engineering", "cloud-computing"],
+        "english_language_arts": ["academic-writing", "literary-theory", "technical-writing", "composition", "research-methods"],
+        "arts": ["art-criticism", "design-systems", "music-history", "media-production", "studio-art"],
+        "life_skills": ["resume-building", "internship-prep", "personal-finance", "professional-communication", "time-management"],
+        "world_languages": ["advanced-spanish", "advanced-french", "translation-practice", "conversation-advanced", "global-culture"],
+    },
+    "adult_learning": {
+        "math": ["practical-math", "personal-finance-math", "statistics-for-work", "business-math", "data-literacy"],
+        "science": ["health-science-basics", "climate-science", "nutrition", "astronomy-basics", "everyday-physics"],
+        "history": ["modern-world-history", "american-history-review", "civic-history", "economic-history", "global-conflicts"],
+        "technology": ["excel-basics", "ai-literacy", "productivity-tools", "online-privacy", "coding-for-career-switchers"],
+        "english_language_arts": ["business-writing", "reading-skills", "presentation-writing", "professional-email", "critical-thinking"],
+        "arts": ["creative-hobbies", "digital-photography", "music-appreciation", "interior-design-basics", "visual-storytelling"],
+        "life_skills": ["career-growth", "parenting-skills", "budgeting", "health-wellness", "communication-skills"],
+        "world_languages": ["travel-spanish", "travel-french", "workplace-english", "conversation-practice", "language-refreshers"],
+    },
 }
 
 _GRADE_DIFFICULTY: dict[str, str] = {
     "preschool": "beginner",
     "elementary": "beginner",
+    "elementary_school": "beginner",
     "middle_school": "beginner",
     "high_school": "intermediate",
     "college": "intermediate",
+    "adult_learning": "intermediate",
     "professional": "advanced",
 }
 
 
-def _interest_seed_slugs(interests: list[str], difficulty: str) -> list[str]:
-    """Map user interest tags to starter topic slugs."""
+def _interest_seed_slugs(interests: list[str], grade_level: str) -> list[str]:
+    """Map user interest tags + grade level to age-appropriate starter topic slugs."""
+    level_map = GRADE_LEVEL_TOPIC_MAP.get(grade_level) or GRADE_LEVEL_TOPIC_MAP["high_school"]
     slugs: list[str] = []
     seen: set[str] = set()
     for tag in interests:
-        for slug in _INTEREST_TOPIC_SEEDS.get(tag.lower().strip(), []):
+        for slug in level_map.get(tag.lower().strip(), []):
             if slug not in seen:
                 seen.add(slug)
                 slugs.append(slug)
@@ -830,7 +871,7 @@ async def get_discover_feed(user_id: str, background_tasks: BackgroundTasks, lim
     # Cold start: no taste signal yet — seed interest-aligned topics and prefer them for discovery
     if taste_vector is None and interests:
         difficulty = _GRADE_DIFFICULTY.get(grade_level, "intermediate")
-        seed_slugs = _interest_seed_slugs(interests, difficulty)
+        seed_slugs = _interest_seed_slugs(interests, grade_level)
         if seed_slugs:
             background_tasks.add_task(_seed_topics_bg, seed_slugs, difficulty)
             existing_seed = [s for s in seed_slugs if s in all_slugs]
@@ -840,7 +881,27 @@ async def get_discover_feed(user_id: str, background_tasks: BackgroundTasks, lim
     else:
         relevant_slugs = _match_interest_slugs(interests, all_slugs, taste_vector=taste_vector)
 
-    return _fetch_discover_clips(db, relevant_slugs, all_slugs, seen_ids, limit, interest_vector=user_interest_vector, taste_vector=taste_vector)
+    clips = _fetch_discover_clips(db, relevant_slugs, all_slugs, seen_ids, limit, interest_vector=user_interest_vector, taste_vector=taste_vector)
+
+    # Global fallback: seed topics are still generating — return best available clips from any topic
+    if not clips:
+        _DISCOVER_COLS = "id,topic_slug,title,description,video_url,thumbnail_url,duration_seconds,source_url,source_platform,hook_score,created_at,embedding"
+        try:
+            fallback = (
+                db.table("clips")
+                .select(_DISCOVER_COLS)
+                .order("hook_score", desc=True)
+                .limit(limit)
+                .execute()
+            )
+            for row in fallback.data:
+                if row["id"] not in seen_ids:
+                    row.setdefault("hook_score", 0.5)
+                    clips.append(Clip(**row))
+        except Exception as e:
+            logger.warning(f"[feed] Global fallback query failed for user={user_id}: {e}")
+
+    return clips
 
 
 @router.post("/{clip_id}/events", status_code=204)

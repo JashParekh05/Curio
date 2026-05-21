@@ -13,6 +13,9 @@ export default function DiscoverPage() {
   const [activeIndex, setActiveIndex] = useState(0);
   const [fetching, setFetching] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [coldStartTimedOut, setColdStartTimedOut] = useState(false);
+  const pollRef = useRef<NodeJS.Timeout | undefined>(undefined);
+  const coldStartTimeoutRef = useRef<NodeJS.Timeout | undefined>(undefined);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const activeIndexRef = useRef(0);
@@ -31,12 +34,37 @@ export default function DiscoverPage() {
 
   useEffect(() => {
     if (!user || !session) return;
-    getDiscoverFeed(user.id, session.access_token).then((c) => {
-      const fresh = c.filter((clip) => !seenClipIdsRef.current.has(clip.id));
-      fresh.forEach((clip) => seenClipIdsRef.current.add(clip.id));
-      setClips(fresh);
+    const token = session.access_token;
+
+    function doFetch() {
+      getDiscoverFeed(user!.id, token).then((c) => {
+        const fresh = c.filter((clip) => !seenClipIdsRef.current.has(clip.id));
+        fresh.forEach((clip) => seenClipIdsRef.current.add(clip.id));
+        if (fresh.length > 0) {
+          setClips(fresh);
+          setFetching(false);
+          clearInterval(pollRef.current);
+          clearTimeout(coldStartTimeoutRef.current);
+        }
+      }).catch(() => {
+        setFetching(false);
+        clearInterval(pollRef.current);
+      });
+    }
+
+    doFetch();
+    // Poll every 4s while cold-start seeds are generating
+    pollRef.current = setInterval(doFetch, 4000);
+    coldStartTimeoutRef.current = setTimeout(() => {
+      clearInterval(pollRef.current);
       setFetching(false);
-    }).catch(() => setFetching(false));
+      setColdStartTimedOut(true);
+    }, 30000);
+
+    return () => {
+      clearInterval(pollRef.current);
+      clearTimeout(coldStartTimeoutRef.current);
+    };
   }, [user, session]);
 
   const goTo = useCallback((idx: number) => {
@@ -119,16 +147,30 @@ export default function DiscoverPage() {
   }
 
   if (clips.length === 0) {
+    if (coldStartTimedOut) {
+      return (
+        <div className="fixed inset-0 bg-black flex flex-col items-center justify-center gap-5 text-white px-6">
+          <button onClick={() => router.push("/")} className="absolute top-4 left-4 text-zinc-500 hover:text-white text-sm transition">
+            ← Home
+          </button>
+          <p className="text-2xl font-semibold text-center">Nothing to discover yet</p>
+          <p className="text-zinc-500 text-sm text-center">Try learning a few topics first — we'll find more content for you.</p>
+          <button onClick={() => router.push("/")} className="bg-white text-black font-semibold px-6 py-3 rounded-2xl text-sm hover:bg-zinc-100 transition">
+            Start learning →
+          </button>
+        </div>
+      );
+    }
     return (
-      <div className="fixed inset-0 bg-black flex flex-col items-center justify-center gap-5 text-white px-6">
+      <div className="fixed inset-0 bg-black flex flex-col items-center justify-center gap-5 text-white">
         <button onClick={() => router.push("/")} className="absolute top-4 left-4 text-zinc-500 hover:text-white text-sm transition">
           ← Home
         </button>
-        <p className="text-2xl font-semibold text-center">Nothing to discover yet</p>
-        <p className="text-zinc-500 text-sm text-center">Try learning a few topics first — we'll find more content for you.</p>
-        <button onClick={() => router.push("/")} className="bg-white text-black font-semibold px-6 py-3 rounded-2xl text-sm hover:bg-zinc-100 transition">
-          Start learning →
-        </button>
+        <div className="w-12 h-12 border-2 border-zinc-700 border-t-white rounded-full animate-spin" />
+        <div className="text-center space-y-1">
+          <p className="text-white font-medium">Building your feed</p>
+          <p className="text-zinc-500 text-sm">Finding clips for your interests…</p>
+        </div>
       </div>
     );
   }
