@@ -28,10 +28,9 @@ async def set_interests(user_id: str, payload: InterestsPayload, caller_id: str 
         raise HTTPException(status_code=403, detail="Access denied")
     try:
         db = get_client()
-        db.table("user_profiles").upsert({
-            "user_id": user_id,
-            "interests": payload.interests,
-            "onboarding_complete": True,
-        }).execute()
+        row = {"user_id": user_id, "interests": payload.interests, "onboarding_complete": True}
+        if payload.grade_level:
+            row["grade_level"] = payload.grade_level
+        db.table("user_profiles").upsert(row).execute()
     except Exception as e:
         logger.warning(f"set_interests failed: {e}")

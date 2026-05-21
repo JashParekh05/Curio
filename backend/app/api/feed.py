@@ -5,7 +5,8 @@ import random
 import logging
 import asyncio
 from datetime import datetime, timezone
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
+from app.rate_limit import limiter
 from app.models.schemas import Clip, ClipEvent, FeedResponse, TopicRecommendation
 from app.db.supabase import get_client
 from app.services.embeddings import embed_text, cosine_similarity, ema_update
@@ -161,13 +162,12 @@ def _update_interest_vector(
     """
     existing = (
         db.table("session_embeddings")
-        .select("interest_vector, taste_vector")
+        .select("taste_vector")
         .eq("session_id", session_id)
         .limit(1)
         .execute()
     )
     row = existing.data[0] if existing.data else {}
-    vector: dict = row.get("interest_vector") or {}
     taste: list[float] | None = _parse_vector(row.get("taste_vector"))
 
     if feedback == "want_more":
@@ -188,8 +188,15 @@ def _update_interest_vector(
             base = -0.02
         delta = base + replay_count * 0.3
 
-    current = float(vector.get(topic_slug, 0.0))
-    vector[topic_slug] = round(max(-1.0, min(1.0, current + delta)), 3)
+    # Atomic interest vector update via RPC (prevents concurrent-write clobber)
+    try:
+        db.rpc("merge_session_interest", {
+            "p_session_id": session_id,
+            "p_topic_slug": topic_slug,
+            "p_delta": round(delta, 4),
+        }).execute()
+    except Exception as e:
+        logger.warning(f"[feed] Failed to merge session interest for session={session_id}: {e}")
 
     # Update taste vector via EMA when we have a clip embedding and the event is positive
     update_taste = clip_embedding and delta > 0
@@ -200,18 +207,15 @@ def _update_interest_vector(
         else:
             new_taste = clip_embedding
 
-    upsert_data: dict = {
-        "session_id": session_id,
-        "interest_vector": vector,
-        "updated_at": "now()",
-    }
     if new_taste is not None:
-        upsert_data["taste_vector"] = new_taste
-
-    try:
-        db.table("session_embeddings").upsert(upsert_data).execute()
-    except Exception as e:
-        logger.warning(f"[feed] Failed to upsert session_embeddings for session={session_id}: {e}")
+        try:
+            db.table("session_embeddings").upsert({
+                "session_id": session_id,
+                "taste_vector": new_taste,
+                "updated_at": "now()",
+            }).execute()
+        except Exception as e:
+            logger.warning(f"[feed] Failed to upsert taste_vector for session={session_id}: {e}")
 
     # Merge into user-level profile for cross-session persistence (atomic via RPC)
     if user_id:
@@ -613,7 +617,7 @@ async def get_feed(
     try:
         result = (
             db.table("clips")
-            .select("*")
+            .select("id,topic_slug,title,description,video_url,thumbnail_url,duration_seconds,source_url,source_platform,hook_score,created_at")
             .eq("topic_slug", topic_slug)
             .order("created_at", desc=False)
             .range(offset, offset + limit - 1)
@@ -691,9 +695,10 @@ def _fetch_discover_clips(
     clips: list[Clip] = []
 
     # Relevant clips first
+    _DISCOVER_COLS = "id,topic_slug,title,description,video_url,thumbnail_url,duration_seconds,source_url,source_platform,hook_score,created_at,embedding"
     for slug in relevant_slugs[:5]:
         try:
-            result = db.table("clips").select("*").eq("topic_slug", slug).limit(6).execute()
+            result = db.table("clips").select(_DISCOVER_COLS).eq("topic_slug", slug).limit(6).execute()
         except Exception as e:
             logger.warning(f"[feed] Failed to fetch discover clips for slug={slug}: {e}")
             continue
@@ -707,7 +712,7 @@ def _fetch_discover_clips(
     random.shuffle(other_slugs)
     for slug in other_slugs[:8]:
         try:
-            result = db.table("clips").select("*").eq("topic_slug", slug).limit(3).execute()
+            result = db.table("clips").select(_DISCOVER_COLS).eq("topic_slug", slug).limit(3).execute()
         except Exception as e:
             logger.warning(f"[feed] Failed to fetch discover clips for slug={slug}: {e}")
             continue
@@ -763,7 +768,8 @@ async def get_discover_feed(user_id: str, limit: int = Query(20, le=50), caller_
 
 
 @router.post("/{clip_id}/events", status_code=204)
-async def record_clip_event(clip_id: str, event: ClipEvent, caller_id: str = Depends(require_user)):
+@limiter.limit("120/minute")
+async def record_clip_event(request: Request, clip_id: str, event: ClipEvent, caller_id: str = Depends(require_user)):
     db = get_client()
     try:
         db.table("clip_events").insert({

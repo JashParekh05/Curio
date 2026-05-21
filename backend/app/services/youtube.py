@@ -48,6 +48,9 @@ def _fetch_transcript(video_id: str) -> list[dict] | None:
 
     out: list[dict] = []
     for seg in segments:
+        if not isinstance(seg, dict):
+            logger.warning(f"[transcript] Skipping non-dict segment for {video_id}: {type(seg)}")
+            continue
         text = (seg.get("text") or "").strip()
         if text:
             out.append({

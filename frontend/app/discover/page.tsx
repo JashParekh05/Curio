@@ -18,6 +18,7 @@ export default function DiscoverPage() {
   const activeIndexRef = useRef(0);
   const clipsRef = useRef<Clip[]>([]);
   const sessionTokenRef = useRef(session?.access_token ?? "");
+  const fetchingMoreRef = useRef(false);
 
   activeIndexRef.current = activeIndex;
   clipsRef.current = clips;
@@ -56,6 +57,16 @@ export default function DiscoverPage() {
     prevIndexRef.current = activeIndex;
     clipStartRef.current = Date.now();
   }, [activeIndex]);
+
+  // Auto-load more when 2 from the end
+  useEffect(() => {
+    if (!user || !session || clips.length === 0 || activeIndex < clips.length - 2) return;
+    if (fetchingMoreRef.current) return;
+    fetchingMoreRef.current = true;
+    getDiscoverFeed(user.id, session.access_token)
+      .then((more) => setClips((prev) => [...prev, ...more]))
+      .finally(() => { fetchingMoreRef.current = false; });
+  }, [activeIndex, clips.length, user, session]);
 
   // Stable IntersectionObserver — created once, re-observes new clips as count grows
   const observerRef = useRef<IntersectionObserver | null>(null);

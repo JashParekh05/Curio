@@ -11,3 +11,4 @@ langgraph>=0.2.0
 sentence-transformers>=3.0.0
 PyJWT[cryptography]>=2.8.0
 cryptography>=42.0.0
+slowapi>=0.1.9

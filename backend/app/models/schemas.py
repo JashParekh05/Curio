@@ -46,6 +46,7 @@ class Clip(BaseModel):
 
 class InterestsPayload(BaseModel):
     interests: list[str]
+    grade_level: str | None = None
 
 
 class ClipEvent(BaseModel):
@@ -57,7 +58,7 @@ class ClipEvent(BaseModel):
 
 
 class TopicRequest(BaseModel):
-    query: str
+    query: str = Field(..., max_length=500)
     user_id: str | None = None
 
 

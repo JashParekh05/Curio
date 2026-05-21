@@ -33,21 +33,6 @@ export default function ReelPlayer({ clip, active, onEnded, onFeedback }: Props)
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [videoError, setVideoError] = useState(false);
   const [feedback, setFeedback] = useState<"want_more" | "already_know" | null>(null);
-  const [controlsVisible, setControlsVisible] = useState(true);
-  const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const showControls = () => {
-    setControlsVisible(true);
-    if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
-    hideTimerRef.current = setTimeout(() => setControlsVisible(false), 2500);
-  };
-
-  useEffect(() => {
-    if (!active) return;
-    showControls();
-    return () => { if (hideTimerRef.current) clearTimeout(hideTimerRef.current); };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, clip.id]);
 
   const isYT = isYouTubeEmbed(clip.video_url);
 
@@ -77,11 +62,7 @@ export default function ReelPlayer({ clip, active, onEnded, onFeedback }: Props)
   }, [active, isYT]);
 
   return (
-    <div
-      className="absolute inset-0 bg-black"
-      onMouseMove={showControls}
-      onTouchStart={showControls}
-    >
+    <div className="absolute inset-0 bg-black">
       {isYT ? (
         <iframe
           ref={iframeRef}
@@ -117,16 +98,21 @@ export default function ReelPlayer({ clip, active, onEnded, onFeedback }: Props)
         </div>
       )}
 
-      {/* Feedback buttons — auto-hide with overlay */}
+      {/* Caption bar */}
+      <div className="absolute bottom-28 inset-x-0 z-10 pl-4 pr-16 pb-2 pointer-events-none">
+        <p className="text-white font-semibold text-base leading-snug drop-shadow-lg line-clamp-2">{clip.title}</p>
+        {clip.description && (
+          <p className="text-zinc-300 text-sm mt-1 leading-snug drop-shadow line-clamp-2">{clip.description}</p>
+        )}
+      </div>
+
+      {/* Feedback buttons — always visible */}
       {onFeedback && (
-        <div
-          className={`absolute right-3 bottom-16 flex flex-col gap-3 items-center z-10 transition-opacity duration-300 ${
-            controlsVisible ? "opacity-100" : "opacity-0 pointer-events-none"
-          }`}
-        >
+        <div className="absolute right-3 bottom-16 flex flex-col gap-3 items-center z-10">
           <button
             onClick={() => { setFeedback("want_more"); onFeedback("want_more"); }}
-            className={`w-11 h-11 rounded-full backdrop-blur-sm border flex items-center justify-center text-lg transition active:scale-95 ${
+            disabled={feedback !== null}
+            className={`w-11 h-11 rounded-full backdrop-blur-sm border flex items-center justify-center text-lg transition active:scale-95 disabled:cursor-default ${
               feedback === "want_more"
                 ? "bg-orange-500/80 border-orange-400 text-white"
                 : "bg-black/30 border-zinc-700 text-zinc-400 hover:border-orange-500/60 hover:text-orange-400"
@@ -137,7 +123,8 @@ export default function ReelPlayer({ clip, active, onEnded, onFeedback }: Props)
           </button>
           <button
             onClick={() => { setFeedback("already_know"); onFeedback("already_know"); }}
-            className={`w-11 h-11 rounded-full backdrop-blur-sm border flex items-center justify-center text-lg transition active:scale-95 ${
+            disabled={feedback !== null}
+            className={`w-11 h-11 rounded-full backdrop-blur-sm border flex items-center justify-center text-lg transition active:scale-95 disabled:cursor-default ${
               feedback === "already_know"
                 ? "bg-emerald-500/80 border-emerald-400 text-white"
                 : "bg-black/30 border-zinc-700 text-zinc-400 hover:border-emerald-500/60 hover:text-emerald-400"

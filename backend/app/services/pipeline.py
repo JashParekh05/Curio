@@ -2,43 +2,42 @@ import os
 import re
 import json
 import logging
-import yt_dlp
 from openai import OpenAI
 from app.services.embeddings import embed_texts
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
-_groq_client = None
+_openai_client = None
 MODEL = "gpt-4o-mini"
-COOKIES_PATH = os.getenv("YOUTUBE_COOKIES_PATH", "cookies.txt")
 
 
-def get_groq():
-    global _groq_client
-    if _groq_client is None:
-        _groq_client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
-    return _groq_client
+def _get_client():
+    global _openai_client
+    if _openai_client is None:
+        _openai_client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+    return _openai_client
 
 
 def process_video(video_url: str, topic_slug: str) -> list[dict]:
-    """Caption pipeline: yt-dlp fetches captions → Groq segments → YouTube embed clips."""
+    """Transcript pipeline: TranscriptAPI fetches captions → GPT segments → YouTube embed clips."""
+    from app.services.youtube import _fetch_transcript
+
     video_id = _extract_video_id(video_url)
     if not video_id:
         logger.warning(f"Could not extract video_id from {video_url}")
         return []
 
-    logger.info(f"Fetching captions for video_id={video_id} topic={topic_slug}")
-    transcript = _fetch_captions(video_id)
+    logger.info(f"Fetching transcript for video_id={video_id} topic={topic_slug}")
+    transcript = _fetch_transcript(video_id)
     if not transcript:
-        logger.warning(f"No captions for {video_id}, skipping")
+        logger.warning(f"No transcript for {video_id}, skipping")
         return []
 
-    logger.info(f"Got {len(transcript)} caption entries, calling Groq...")
+    logger.info(f"Got {len(transcript)} transcript entries, segmenting...")
     segments = _identify_segments(transcript, topic_slug)
-    logger.info(f"Groq returned {len(segments)} segments")
+    logger.info(f"Got {len(segments)} segments")
 
-    # Batch embed all segment transcripts
     texts = [seg.get("transcript") or seg.get("title", "") for seg in segments]
     embeddings = embed_texts(texts)
 
@@ -48,7 +47,7 @@ def process_video(video_url: str, topic_slug: str) -> list[dict]:
             "topic_slug": topic_slug,
             "title": seg["title"],
             "description": seg["description"],
-            "video_url": f"https://www.youtube.com/embed/{video_id}?start={int(seg['start'])}&autoplay=1&enablejsapi=1",
+            "video_url": f"https://www.youtube.com/embed/{video_id}?start={int(seg['start'])}&autoplay=1&rel=0&modestbranding=1",
             "thumbnail_url": f"https://img.youtube.com/vi/{video_id}/hqdefault.jpg",
             "duration_seconds": int(seg["end"] - seg["start"]),
             "transcript": seg["transcript"],
@@ -74,79 +73,13 @@ def _extract_video_id(url: str) -> str | None:
     return vid
 
 
-def _fetch_captions(video_id: str) -> list[dict] | None:
-    """Fetch auto-captions via yt-dlp. No audio download."""
-    url = f"https://www.youtube.com/watch?v={video_id}"
-    ydl_opts = {
-        "quiet": True,
-        "no_warnings": True,
-        "skip_download": True,
-        "noplaylist": True,
-    }
-    if os.path.exists(COOKIES_PATH):
-        ydl_opts["cookiefile"] = COOKIES_PATH
-
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False, process=False)
-
-            # Prefer manual subtitles, fall back to auto-generated
-            subtitle_url = None
-            subs = info.get("subtitles", {})
-            auto = info.get("automatic_captions", {})
-            for track_dict in [subs, auto]:
-                en = track_dict.get("en") or track_dict.get("en-orig")
-                if not en:
-                    continue
-                for fmt in en:
-                    if fmt.get("ext") == "json3":
-                        subtitle_url = fmt["url"]
-                        break
-                if subtitle_url:
-                    break
-
-            if not subtitle_url:
-                logger.warning(f"No English captions found for {video_id}")
-                return None
-
-            # Use yt-dlp's session to fetch (carries cookies/headers YouTube expects)
-            raw = ydl.urlopen(subtitle_url).read()
-            data = json.loads(raw)
-    except Exception as e:
-        logger.warning(f"Caption fetch failed for {video_id}: {e}")
-        return None
-
-    return _parse_json3_captions(data)
-
-
-def _parse_json3_captions(data: dict) -> list[dict] | None:
-    """Parse YouTube json3 subtitle format into [{start, duration, text}]."""
-    entries = []
-    for event in data.get("events", []):
-        segs = event.get("segs")
-        if not segs:
-            continue
-        text = "".join(s.get("utf8", "") for s in segs).strip()
-        if not text or text == "\n":
-            continue
-        start_ms = event.get("tStartMs", 0)
-        dur_ms = event.get("dDurationMs", 500)
-        entries.append({
-            "start": start_ms / 1000,
-            "duration": max(dur_ms / 1000, 0.5),
-            "text": text,
-        })
-
-    return entries if entries else None
-
-
 def _identify_segments(transcript: list[dict], topic_slug: str) -> list[dict]:
     segments_with_times = [
         {"start": s["start"], "end": s["start"] + s["duration"], "text": s["text"]}
         for s in transcript
     ]
 
-    client = get_groq()
+    client = _get_client()
     prompt = f"""You are cutting an educational video about "{topic_slug}" into short reels optimized for viewer retention (TikTok-style).
 
 CRITICAL RULE: Every segment MUST open with a hook — the very first words of the segment should grab attention. Strong hooks are:
@@ -157,7 +90,7 @@ CRITICAL RULE: Every segment MUST open with a hook — the very first words of t
 Avoid segments that open with intros, transitions, or "In this section we will..."
 
 Here is the transcript with timestamps:
-{json.dumps(segments_with_times[:80], indent=2)}
+{json.dumps(segments_with_times[:300], indent=2)}
 
 Identify ONLY 2-3 segments — the single most hook-worthy moments. Each 45-90 seconds long, each covering one clear idea. Prefer cuts that start mid-thought at a moment of tension or revelation. More can be generated later if users engage; quality over quantity.
 

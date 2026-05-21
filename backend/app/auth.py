@@ -30,7 +30,8 @@ def require_user(authorization: Annotated[str | None, Header()] = None) -> str:
             token,
             signing_key.key,
             algorithms=["ES256", "RS256", "HS256"],  # accept all Supabase-supported algs
-            options={"verify_aud": False},
+            options={"verify_aud": True},
+            audience="authenticated",
         )
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token expired")

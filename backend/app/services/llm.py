@@ -70,10 +70,16 @@ def parse_learning_path(query: str, session_id: str | None = None) -> LearningPa
     sid = session_id or str(uuid.uuid4())
 
     curated = _curated_topics()
+    # Only inject the library for CS/ML/math queries — it's all tech topics and
+    # confuses the LLM into returning wrong slugs for unrelated domains.
+    CS_KEYWORDS = {"computer", "programming", "machine learning", "mathematics",
+                   "algorithm", "data", "software", "statistics", "neural", "code"}
+    query_lower = query.lower()
+    library_relevant = any(kw in query_lower for kw in CS_KEYWORDS)
     curated_block = (
-        "\n\nExisting topic library (REUSE these slugs when semantically applicable):\n"
+        "\n\nExisting topic library (REUSE these slugs when semantically applicable — only if the concept is an EXACT match):\n"
         + json.dumps(curated, indent=2)
-        if curated else ""
+        if curated and library_relevant else ""
     )
 
     logger.info(f"[LLM] Generating learning path for query='{query[:80]}'")

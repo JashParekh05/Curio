@@ -124,11 +124,11 @@ export async function getUserProfile(userId: string, token: string): Promise<Use
   return res.json();
 }
 
-export async function setUserInterests(userId: string, interests: string[], token: string): Promise<void> {
+export async function setUserInterests(userId: string, interests: string[], token: string, gradeLevel?: string): Promise<void> {
   const res = await fetch(`${API_BASE}/api/users/${encodeURIComponent(userId)}/interests`, {
     method: "POST",
     headers: authHeaders(token),
-    body: JSON.stringify({ interests }),
+    body: JSON.stringify({ interests, grade_level: gradeLevel }),
   });
   if (!res.ok) throw new Error(`Failed to save interests: ${res.status}`);
 }

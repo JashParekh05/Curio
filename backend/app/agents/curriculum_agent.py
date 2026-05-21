@@ -93,10 +93,18 @@ def _node_build_curriculum(state: CurriculumState) -> dict:
     intent = state["intent"]
     curated = state["curated_topics"]
 
+    # Only inject the curated library when the query is in a domain that overlaps with it.
+    # The library is CS/ML/math — injecting it for unrelated domains (law, history, etc.)
+    # causes the LLM to hallucinate spurious connections and return wrong topics.
+    CS_DOMAINS = {"computer science", "programming", "mathematics", "machine learning",
+                  "data science", "software engineering", "algorithms", "statistics"}
+    domain = intent.get("domain", "").lower()
+    library_relevant = any(kw in domain for kw in CS_DOMAINS)
+
     curated_block = (
-        "\n\nExisting topic library (REUSE these slugs when semantically applicable):\n"
+        "\n\nExisting topic library (REUSE these slugs when semantically applicable — only if the concept is an EXACT match):\n"
         + json.dumps(curated, indent=2)
-        if curated else ""
+        if curated and library_relevant else ""
     )
 
     system = f"""You are a curriculum designer for an educational short-form video platform.

@@ -1,9 +1,10 @@
 import asyncio
 import logging
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from app.models.schemas import TopicRequest, LearningPath
 from app.db.supabase import get_client
 from app.auth import require_user
+from app.rate_limit import limiter
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/topics", tags=["topics"])
@@ -20,7 +21,8 @@ async def _process_topics_sequential(topics: list[tuple[str, str]]) -> None:
 
 
 @router.post("/", response_model=LearningPath)
-async def create_learning_path(req: TopicRequest, background_tasks: BackgroundTasks, caller_id: str = Depends(require_user)):
+@limiter.limit("10/minute")
+async def create_learning_path(request: Request, req: TopicRequest, background_tasks: BackgroundTasks, caller_id: str = Depends(require_user)):
     from app.agents.curriculum_agent import run_curriculum
 
     if req.user_id and req.user_id != caller_id:

@@ -53,7 +53,25 @@ begin
     on conflict (user_id) do update set taste_vector = excluded.taste_vector;
 end; $$;
 
--- 7. Optional: match_clips RPC for direct vector search from the client
+-- 7. Atomic session-level interest vector update (mirrors merge_user_interest for sessions)
+create or replace function merge_session_interest(p_session_id text, p_topic_slug text, p_delta float)
+returns void language plpgsql as $$
+declare
+  current_iv jsonb;
+  current_val float;
+  new_val float;
+begin
+  select interest_vector into current_iv from session_embeddings where session_id = p_session_id for update;
+  if current_iv is null then current_iv := '{}'::jsonb; end if;
+  current_val := coalesce((current_iv ->> p_topic_slug)::float, 0.0);
+  new_val := greatest(-1.0, least(1.0, current_val + p_delta));
+  current_iv := jsonb_set(current_iv, array[p_topic_slug], to_jsonb(round(new_val::numeric, 3)));
+  insert into session_embeddings (session_id, interest_vector)
+    values (p_session_id, current_iv)
+    on conflict (session_id) do update set interest_vector = excluded.interest_vector;
+end; $$;
+
+-- 8. Optional: match_clips RPC for direct vector search from the client
 --    (not required — Python side does scoring, but useful for debugging)
 create or replace function match_clips(
   query_embedding vector(384),

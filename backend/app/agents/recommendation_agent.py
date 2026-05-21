@@ -103,11 +103,18 @@ def _node_find_candidates(state: RecommendationState) -> dict:
             .limit(20)
             .execute()
         )
+        # Batch clip count for all fallback candidates in a single query
+        fallback_slugs = [t["slug"] for t in fallback.data if t["slug"] not in seen_candidate_slugs]
+        slug_counts: dict[str, int] = {}
+        if fallback_slugs:
+            count_rows = db.table("clips").select("topic_slug").in_("topic_slug", fallback_slugs).execute()
+            for row in count_rows.data:
+                slug_counts[row["topic_slug"]] = slug_counts.get(row["topic_slug"], 0) + 1
+
         fallback_with_counts = []
         for t in fallback.data:
             if t["slug"] not in seen_candidate_slugs:
-                count_res = db.table("clips").select("id", count="exact").eq("topic_slug", t["slug"]).execute()
-                clip_count = count_res.count or 0
+                clip_count = slug_counts.get(t["slug"], 0)
                 if clip_count > 0:
                     seen_candidate_slugs.add(t["slug"])
                     fallback_with_counts.append({**t, "source": "fallback", "clip_count": clip_count})
@@ -115,11 +122,16 @@ def _node_find_candidates(state: RecommendationState) -> dict:
         fallback_with_counts.sort(key=lambda x: x["clip_count"], reverse=True)
         candidates.extend(fallback_with_counts[:10])
 
-    # Attach clip counts (skip if already set by fallback path)
-    for c in candidates:
-        if "clip_count" not in c:
-            count_res = db.table("clips").select("id", count="exact").eq("topic_slug", c["slug"]).execute()
-            c["clip_count"] = count_res.count or 0
+    # Batch clip counts for prerequisite-graph candidates (not set yet)
+    needs_count = [c for c in candidates if "clip_count" not in c]
+    if needs_count:
+        batch_slugs = [c["slug"] for c in needs_count]
+        count_rows = db.table("clips").select("topic_slug").in_("topic_slug", batch_slugs).execute()
+        batch_counts: dict[str, int] = {}
+        for row in count_rows.data:
+            batch_counts[row["topic_slug"]] = batch_counts.get(row["topic_slug"], 0) + 1
+        for c in needs_count:
+            c["clip_count"] = batch_counts.get(c["slug"], 0)
 
     logger.info(f"[rec_agent] candidates: {[c['slug'] for c in candidates]}")
     return {"candidates": candidates}
