@@ -80,6 +80,21 @@ async def create_learning_path(request: Request, req: TopicRequest, background_t
         logger.error(f"[topics] Curriculum agent failed for query='{req.query[:80]}': {e}")
         raise HTTPException(status_code=502, detail="Failed to generate learning path. Please try again.")
 
+    # Reuse existing, already-seeded topics for semantically-equivalent slugs so
+    # similar queries don't rebuild content (saves YouTube quota + OpenAI calls).
+    from app.services.topic_resolver import resolve_topic
+    seen_slugs: set[str] = set()
+    resolved_topics = []
+    for t in path.topics:
+        match = resolve_topic(t.slug, t.name)
+        if match and match != t.slug:
+            t = t.model_copy(update={"slug": match})
+        if t.slug in seen_slugs:
+            continue  # two generated topics collapsed onto the same existing one
+        seen_slugs.add(t.slug)
+        resolved_topics.append(t)
+    path.topics = resolved_topics
+
     db = get_client()
 
     try:
@@ -114,6 +129,8 @@ async def create_learning_path(request: Request, req: TopicRequest, background_t
                         "prerequisites": topic.prerequisites,
                     }
                 ).execute()
+                from app.services.topic_resolver import register_topic
+                register_topic(topic.slug, topic.name)
         except Exception as e:
             logger.warning(f"[topics] Failed to upsert topic={topic.slug}: {e}")
 

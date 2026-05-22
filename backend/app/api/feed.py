@@ -160,15 +160,20 @@ def _update_interest_vector(
     watching most of it. Lets the algorithm tell 'topic is boring' from 'this
     specific clip didn't quite land'.
     """
-    existing = (
-        db.table("session_embeddings")
-        .select("taste_vector")
-        .eq("session_id", session_id)
-        .limit(1)
-        .execute()
-    )
-    row = existing.data[0] if existing.data else {}
-    taste: list[float] | None = _parse_vector(row.get("taste_vector"))
+    # Session-level taste is only available when this event belongs to a path
+    # session. Topic-feed / discover events have no session — they still
+    # personalize at the user level below.
+    taste: list[float] | None = None
+    if session_id:
+        existing = (
+            db.table("session_embeddings")
+            .select("taste_vector")
+            .eq("session_id", session_id)
+            .limit(1)
+            .execute()
+        )
+        row = existing.data[0] if existing.data else {}
+        taste = _parse_vector(row.get("taste_vector"))
 
     if feedback == "want_more":
         delta = 0.6
@@ -188,15 +193,17 @@ def _update_interest_vector(
             base = -0.02
         delta = base + replay_count * 0.3
 
-    # Atomic interest vector update via RPC (prevents concurrent-write clobber)
-    try:
-        db.rpc("merge_session_interest", {
-            "p_session_id": session_id,
-            "p_topic_slug": topic_slug,
-            "p_delta": round(delta, 4),
-        }).execute()
-    except Exception as e:
-        logger.warning(f"[feed] Failed to merge session interest for session={session_id}: {e}")
+    # Atomic interest vector update via RPC (prevents concurrent-write clobber).
+    # Session-level only — skipped for topic-feed/discover events with no session.
+    if session_id:
+        try:
+            db.rpc("merge_session_interest", {
+                "p_session_id": session_id,
+                "p_topic_slug": topic_slug,
+                "p_delta": round(delta, 4),
+            }).execute()
+        except Exception as e:
+            logger.warning(f"[feed] Failed to merge session interest for session={session_id}: {e}")
 
     # Update taste vector via EMA when we have a clip embedding and the event is positive
     update_taste = clip_embedding and delta > 0
@@ -207,7 +214,7 @@ def _update_interest_vector(
         else:
             new_taste = clip_embedding
 
-    if new_taste is not None:
+    if new_taste is not None and session_id:
         try:
             db.table("session_embeddings").upsert({
                 "session_id": session_id,
@@ -1003,40 +1010,55 @@ async def get_discover_feed(user_id: str, background_tasks: BackgroundTasks, lim
 @limiter.limit("120/minute")
 async def record_clip_event(request: Request, clip_id: str, event: ClipEvent, caller_id: str = Depends(require_user)):
     db = get_client()
+    base_row = {
+        "clip_id": clip_id,
+        "session_id": event.session_id,
+        "watch_ms": event.watch_ms,
+        "completed": event.completed,
+        "replay_count": event.replay_count,
+    }
     try:
-        db.table("clip_events").insert({
-            "clip_id": clip_id,
-            "session_id": event.session_id,
-            "watch_ms": event.watch_ms,
-            "completed": event.completed,
-            "replay_count": event.replay_count,
-        }).execute()
+        # Persist feedback (🔥/✓) so it survives as history, not just as a live
+        # vector nudge. Falls back to core columns if the `feedback` column hasn't
+        # been migrated yet, so telemetry is never lost.
+        db.table("clip_events").insert({**base_row, "feedback": event.feedback}).execute()
+    except Exception:
+        try:
+            db.table("clip_events").insert(base_row).execute()
+        except Exception as e:
+            logger.warning(f"Failed to record event for clip {clip_id}: {e}")
+            return
+
+    # Personalize on every event. Session-feed events update both session- and
+    # user-level vectors; topic-feed/discover events have no session but still
+    # update the authenticated user's profile (previously they were dropped —
+    # ~half of all telemetry).
+    try:
+        clip = db.table("clips").select("topic_slug, embedding, duration_seconds").eq("id", clip_id).limit(1).execute()
     except Exception as e:
-        logger.warning(f"Failed to record event for clip {clip_id}: {e}")
+        logger.warning(f"[feed] Failed to fetch clip {clip_id} for event: {e}")
+        return
+    if not clip.data:
         return
 
+    user_id = caller_id
     if event.session_id:
         try:
-            clip = db.table("clips").select("topic_slug, embedding, duration_seconds").eq("id", clip_id).limit(1).execute()
+            path = db.table("learning_paths").select("user_id").eq("session_id", event.session_id).limit(1).execute()
+            owner = path.data[0].get("user_id") if path.data else None
         except Exception as e:
-            logger.warning(f"[feed] Failed to fetch clip {clip_id} for event: {e}")
+            logger.warning(f"[feed] Failed to fetch user_id for session={event.session_id}: {e}")
+            owner = None
+        if owner and owner != caller_id:
+            logger.warning(f"[feed] session ownership mismatch: caller={caller_id} session_owner={owner}")
             return
-        if clip.data:
-            raw_emb = _parse_vector(clip.data[0].get("embedding"))
-            try:
-                path = db.table("learning_paths").select("user_id").eq("session_id", event.session_id).limit(1).execute()
-                user_id = path.data[0].get("user_id") if path.data else None
-            except Exception as e:
-                logger.warning(f"[feed] Failed to fetch user_id for session={event.session_id}: {e}")
-                user_id = None
-            if user_id and user_id != caller_id:
-                logger.warning(f"[feed] session ownership mismatch: caller={caller_id} session_owner={user_id}")
-                return
-            _update_interest_vector(
-                db, event.session_id, clip.data[0]["topic_slug"],
-                event.completed, event.replay_count, event.feedback,
-                clip_embedding=raw_emb,
-                user_id=user_id,
-                watch_ms=event.watch_ms,
-                duration_seconds=clip.data[0].get("duration_seconds"),
-            )
+        user_id = owner or caller_id
+
+    _update_interest_vector(
+        db, event.session_id, clip.data[0]["topic_slug"],
+        event.completed, event.replay_count, event.feedback,
+        clip_embedding=_parse_vector(clip.data[0].get("embedding")),
+        user_id=user_id,
+        watch_ms=event.watch_ms,
+        duration_seconds=clip.data[0].get("duration_seconds"),
+    )
