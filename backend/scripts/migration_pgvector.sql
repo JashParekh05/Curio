@@ -19,7 +19,13 @@ create index if not exists clips_embedding_hnsw
   with (m = 16, ef_construction = 64);
 
 -- 5. Atomic interest vector update (prevents concurrent-write clobber)
-create or replace function merge_user_interest(p_user_id uuid, p_topic_slug text, p_delta float)
+-- user_profiles.user_id is TEXT, so p_user_id must be text — comparing a uuid
+-- param against a text column raises "operator does not exist: text = uuid".
+-- Drop EVERY prior overload (a stale uuid-param version can be live in prod),
+-- then recreate the text version so only it remains.
+drop function if exists merge_user_interest(uuid, text, float);
+drop function if exists merge_user_interest(text, text, float);
+create or replace function merge_user_interest(p_user_id text, p_topic_slug text, p_delta float)
 returns void language plpgsql as $$
 declare
   current_iv jsonb;
@@ -37,7 +43,9 @@ end; $$;
 
 -- 6. Atomic taste vector EMA update (prevents concurrent-write clobber)
 --    Requires pgvector >= 0.7 for vector arithmetic operators
-create or replace function merge_user_taste(p_user_id uuid, p_new_taste vector(384), p_alpha float default 0.1)
+drop function if exists merge_user_taste(uuid, vector, float);
+drop function if exists merge_user_taste(text, vector, float);
+create or replace function merge_user_taste(p_user_id text, p_new_taste vector(384), p_alpha float default 0.1)
 returns void language plpgsql as $$
 declare
   existing vector(384);
