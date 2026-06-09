@@ -23,15 +23,18 @@ class PipelineState(TypedDict):
 def _node_search(state: PipelineState) -> dict:
     import os, requests
     from app.services.youtube import search_cache_get, search_cache_put
+    from app.services.video_ranking import rank_videos
 
     query = state.get("search_query") or f"{state['topic_name']} explained"
 
     # Serve from cache when possible — a YouTube search costs 100 quota units
     # (10k/day free). Caching by query means re-testing the same topics is free.
+    # Re-rank cached results too: ranking is local/free and older cache entries
+    # were stored in raw YouTube relevance order.
     cached = search_cache_get(query)
     if cached:
         logger.info(f"[pipeline_agent] search cache hit: query='{query}' ({len(cached)} videos, 0 units)")
-        return {"videos": cached}
+        return {"videos": rank_videos(cached, state["topic_name"], query)}
 
     api_key = os.environ.get("YOUTUBE_API_KEY", "")
     if not api_key:
@@ -39,17 +42,21 @@ def _node_search(state: PipelineState) -> dict:
 
     logger.info(f"[pipeline_agent] search: topic={state['topic_slug']} section={state.get('section_index')} query='{query}' (~100 units)")
 
+    # No videoDuration filter: "short" (<4 min) biased the pool toward Shorts-style
+    # content with thin transcripts. We cut 45-90s clips by timestamp, so 4-20 min
+    # explainers are ideal source material — duration fitness is handled in ranking.
+    # maxResults 10 instead of 6: the search costs 100 units either way, and a
+    # bigger pool gives the ranker real choices.
     search = requests.get(
         "https://www.googleapis.com/youtube/v3/search",
         params={
             "key": api_key,
             "q": query,
             "type": "video",
-            "videoDuration": "short",
             "videoEmbeddable": "true",
             "safeSearch": "strict",
             "relevanceLanguage": "en",
-            "maxResults": 6,
+            "maxResults": 10,
             "part": "snippet",
         },
         timeout=10,
@@ -64,12 +71,13 @@ def _node_search(state: PipelineState) -> dict:
     video_ids = [i["id"]["videoId"] for i in items]
     details = requests.get(
         "https://www.googleapis.com/youtube/v3/videos",
-        params={"key": api_key, "id": ",".join(video_ids), "part": "contentDetails,snippet"},
+        params={"key": api_key, "id": ",".join(video_ids), "part": "contentDetails,snippet,statistics"},
         timeout=10,
     )
     logger.info(f"[pipeline_agent] videos.list (~1 unit)")
 
     durations: dict[str, int] = {}
+    stats: dict[str, dict] = {}
     if details.ok:
         import re
         for v in details.json().get("items", []):
@@ -77,6 +85,11 @@ def _node_search(state: PipelineState) -> dict:
             if m:
                 h, mn, s = (int(x or 0) for x in m.groups())
                 durations[v["id"]] = h * 3600 + mn * 60 + s
+            st = v.get("statistics", {})
+            stats[v["id"]] = {
+                "view_count": int(st["viewCount"]) if st.get("viewCount") else None,
+                "like_count": int(st["likeCount"]) if st.get("likeCount") else None,
+            }
 
     videos = []
     for item in items:
@@ -88,8 +101,10 @@ def _node_search(state: PipelineState) -> dict:
             "description": snippet.get("description", "")[:200] or None,
             "thumbnail_url": snippet.get("thumbnails", {}).get("high", {}).get("url"),
             "duration_seconds": durations.get(vid_id, 180),
+            **stats.get(vid_id, {}),
         })
 
+    videos = rank_videos(videos, state["topic_name"], query)
     if videos:
         search_cache_put(query, videos)
     return {"videos": videos}
@@ -108,6 +123,9 @@ def _node_transcribe(state: PipelineState) -> dict:
     for v in state["videos"]:
         if len(kept) >= limit:
             break
+        # Search no longer filters by duration; don't pay TranscriptAPI for lectures
+        if (v.get("duration_seconds") or 180) > 2400:
+            continue
         transcript = _fetch_transcript(v["video_id"])
         if transcript:
             v["transcript"] = transcript
