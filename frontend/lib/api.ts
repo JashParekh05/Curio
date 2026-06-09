@@ -157,6 +157,45 @@ export async function getDiscoverFeed(userId: string, token: string): Promise<Cl
   return res.json();
 }
 
+export interface ClipQuiz {
+  question: string;
+  options: string[];
+  correct_index: number;
+  explanation: string | null;
+}
+
+export async function getClipQuiz(clipId: string, token: string): Promise<ClipQuiz | null> {
+  try {
+    const res = await fetch(`${API_BASE}/api/feed/${clipId}/quiz`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+export function recordQuizResult(
+  clipId: string,
+  correct: boolean,
+  sessionId: string | null | undefined,
+  token: string,
+): void {
+  fetch(`${API_BASE}/api/feed/${clipId}/events`, {
+    method: "POST",
+    headers: authHeaders(token),
+    body: JSON.stringify({
+      watch_ms: 0,
+      completed: false,
+      session_id: sessionId ?? null,
+      replay_count: 0,
+      feedback: null,
+      quiz_correct: correct,
+    }),
+  }).catch((err) => console.warn("[recordQuizResult] failed:", err));
+}
+
 export function recordClipEvent(
   clipId: string,
   watchMs: number,

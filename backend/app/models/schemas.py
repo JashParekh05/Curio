@@ -59,6 +59,14 @@ class ClipEvent(BaseModel):
     completed: bool = False
     replay_count: int = 0
     feedback: Literal["want_more", "already_know"] | None = None
+    quiz_correct: bool | None = None
+
+
+class ClipQuiz(BaseModel):
+    question: str
+    options: list[str]
+    correct_index: int
+    explanation: str | None = None
 
 
 class TopicRequest(BaseModel):

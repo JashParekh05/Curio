@@ -3,8 +3,9 @@
 import { Suspense, useEffect, useRef, useState, useCallback } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
-import { getPathFeed, getTopicFeed, recordClipEvent, getRecommendations, type Clip, type FeedResponse, type TopicRecommendation } from "@/lib/api";
+import { getPathFeed, getTopicFeed, recordClipEvent, getRecommendations, getClipQuiz, recordQuizResult, type Clip, type ClipQuiz, type FeedResponse, type TopicRecommendation } from "@/lib/api";
 import ReelPlayer from "@/components/ReelPlayer";
+import QuizCard from "@/components/QuizCard";
 
 const POLL_INTERVAL_MS = 4000;
 
@@ -39,6 +40,13 @@ function FeedContent() {
   const alreadyKnowRef = useRef<Record<string, number>>({});
   const seenClipIdsRef = useRef<Set<string>>(new Set());
   const fetchingMoreRef = useRef(false);
+
+  // Post-clip quiz: prefetched per clip, shown when the clip's duration elapses
+  // (YouTube embeds never fire an ended event) or onEnded for native videos.
+  const [activeQuiz, setActiveQuiz] = useState<ClipQuiz | null>(null);
+  const [quizVisible, setQuizVisible] = useState(false);
+  const quizCacheRef = useRef<Record<string, ClipQuiz | null>>({});
+  const quizDoneRef = useRef<Set<string>>(new Set());
   const loadFeed = useCallback(async () => {
     if (!session) return;
     try {
@@ -220,6 +228,37 @@ function FeedContent() {
     return () => window.removeEventListener("keydown", handleKey);
   }, [goTo]);
 
+  const activeClipId = clips[activeIndex]?.id;
+
+  // Prefetch the quiz as soon as a clip becomes active so it's ready by clip end
+  useEffect(() => {
+    if (!activeClipId || quizCacheRef.current[activeClipId] !== undefined) return;
+    quizCacheRef.current[activeClipId] = null; // marks in-flight; resolves to quiz or stays null
+    getClipQuiz(activeClipId, sessionTokenRef.current).then((q) => {
+      quizCacheRef.current[activeClipId] = q;
+    });
+  }, [activeClipId]);
+
+  const maybeShowQuiz = useCallback((clip: Clip): boolean => {
+    if (quizDoneRef.current.has(clip.id)) return false;
+    const quiz = quizCacheRef.current[clip.id];
+    if (!quiz) return false;
+    setActiveQuiz(quiz);
+    setQuizVisible(true);
+    return true;
+  }, []);
+
+  // Show the quiz when the clip's intended duration elapses. The YouTube embed
+  // keeps playing past the segment end anyway, so this IS the end-of-clip moment.
+  useEffect(() => {
+    setQuizVisible(false);
+    if (!activeClipId) return;
+    const clip = clipsRef.current[activeIndexRef.current];
+    if (!clip || quizDoneRef.current.has(clip.id)) return;
+    const t = setTimeout(() => maybeShowQuiz(clip), (clip.duration_seconds ?? 60) * 1000);
+    return () => clearTimeout(t);
+  }, [activeClipId, maybeShowQuiz]);
+
   // Fetch more clips when 2 from the end (uses updated interest vector)
   useEffect(() => {
     if (sessionId && clips.length > 0 && activeIndex >= clips.length - 2) {
@@ -391,8 +430,8 @@ function FeedContent() {
             {i === activeIndex ? (
               <ReelPlayer
                 clip={clip}
-                active={true}
-                onEnded={() => goTo(i + 1)}
+                active={!quizVisible}
+                onEnded={() => { if (!maybeShowQuiz(clip)) goTo(i + 1); }}
                 onFeedback={sessionId ? (type) => {
                   recordClipEvent(clip.id, Date.now() - clipStartRef.current, false, sessionId, 0, type, session?.access_token ?? "");
                   if (type === "already_know") {
@@ -411,6 +450,17 @@ function FeedContent() {
                 } : undefined}
               />
             ) : null}
+            {i === activeIndex && quizVisible && activeQuiz && (
+              <QuizCard
+                quiz={activeQuiz}
+                onAnswer={(correct) => {
+                  quizDoneRef.current.add(clip.id);
+                  recordQuizResult(clip.id, correct, sessionIdRef.current, sessionTokenRef.current);
+                }}
+                onContinue={() => { setQuizVisible(false); goTo(i + 1); }}
+                onSkip={() => { quizDoneRef.current.add(clip.id); setQuizVisible(false); }}
+              />
+            )}
           </div>
         ))}
 

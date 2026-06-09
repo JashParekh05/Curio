@@ -2,7 +2,7 @@ import asyncio
 import logging
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from app.rate_limit import limiter
-from app.models.schemas import Clip, ClipEvent, FeedResponse, TopicRecommendation
+from app.models.schemas import Clip, ClipEvent, ClipQuiz, FeedResponse, TopicRecommendation
 from app.db.supabase import get_client
 from app.auth import require_user
 
@@ -337,6 +337,18 @@ async def get_discover_feed(user_id: str, background_tasks: BackgroundTasks, lim
     return clips
 
 
+@router.get("/{clip_id}/quiz", response_model=ClipQuiz | None)
+@limiter.limit("60/minute")
+async def get_clip_quiz(request: Request, clip_id: str, caller_id: str = Depends(require_user)):
+    """One LLM-generated comprehension question for a clip, from its transcript.
+
+    Returns null (not 404) when the clip has no usable transcript so the
+    frontend can silently skip the quiz step.
+    """
+    from app.services.quiz import get_or_generate_quiz
+    return await asyncio.to_thread(get_or_generate_quiz, clip_id)
+
+
 @router.post("/{clip_id}/events", status_code=204)
 @limiter.limit("120/minute")
 async def record_clip_event(request: Request, clip_id: str, event: ClipEvent, caller_id: str = Depends(require_user)):
@@ -349,16 +361,24 @@ async def record_clip_event(request: Request, clip_id: str, event: ClipEvent, ca
         "replay_count": event.replay_count,
     }
     try:
-        # Persist feedback (🔥/✓) so it survives as history, not just as a live
-        # vector nudge. Falls back to core columns if the `feedback` column hasn't
-        # been migrated yet, so telemetry is never lost.
-        db.table("clip_events").insert({**base_row, "feedback": event.feedback}).execute()
+        # Persist feedback (🔥/✓) and quiz results so they survive as history, not
+        # just as a live vector nudge. Falls back to core columns if the `feedback`
+        # or `quiz_correct` column hasn't been migrated yet, so telemetry is never lost.
+        db.table("clip_events").insert({**base_row, "feedback": event.feedback, "quiz_correct": event.quiz_correct}).execute()
     except Exception:
         try:
-            db.table("clip_events").insert(base_row).execute()
-        except Exception as e:
-            logger.warning(f"Failed to record event for clip {clip_id}: {e}")
-            return
+            db.table("clip_events").insert({**base_row, "feedback": event.feedback}).execute()
+        except Exception:
+            try:
+                db.table("clip_events").insert(base_row).execute()
+            except Exception as e:
+                logger.warning(f"Failed to record event for clip {clip_id}: {e}")
+                return
+
+    # Quiz events carry watch_ms=0 and would register as a skip in the
+    # personalization vectors — they're a comprehension signal, not a watch signal.
+    if event.quiz_correct is not None:
+        return
 
     # Personalize on every event. Session-feed events update both session- and
     # user-level vectors; topic-feed/discover events have no session but still
