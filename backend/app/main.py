@@ -14,7 +14,7 @@ load_dotenv()
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
-from app.api import topics, feed, users
+from app.api import topics, feed, users, analytics
 
 app = FastAPI(title="LearnReel API", version="0.1.0")
 
@@ -37,6 +37,7 @@ app.add_middleware(
 app.include_router(topics.router)
 app.include_router(feed.router)
 app.include_router(users.router)
+app.include_router(analytics.router)
 
 
 @app.on_event("startup")
