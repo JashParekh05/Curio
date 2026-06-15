@@ -3,3 +3,4 @@
 # Run tests from the backend/ dir:
 #   python -m pytest
 pytest>=8.0
+hypothesis>=6.0
