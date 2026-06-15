@@ -4,6 +4,7 @@ import { Suspense, useEffect, useRef, useState, useCallback } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { getPathFeed, getTopicFeed, recordClipEvent, getRecommendations, type Clip, type FeedResponse, type TopicRecommendation } from "@/lib/api";
+import { flushClipEvent, type LastLogged } from "@/lib/clip-telemetry";
 import ReelPlayer from "@/components/ReelPlayer";
 
 const POLL_INTERVAL_MS = 4000;
@@ -11,7 +12,7 @@ const POLL_INTERVAL_MS = 4000;
 function FeedContent() {
   const params = useSearchParams();
   const router = useRouter();
-  const { session } = useAuth();
+  const { session, isGuest } = useAuth();
   const sessionId = params.get("session");
   const topicSlug = params.get("topic");
 
@@ -39,6 +40,8 @@ function FeedContent() {
   const alreadyKnowRef = useRef<Record<string, number>>({});
   const seenClipIdsRef = useRef<Set<string>>(new Set());
   const fetchingMoreRef = useRef(false);
+  const isGuestRef = useRef(isGuest);
+  const lastLoggedRef = useRef<LastLogged | null>(null);
   const loadFeed = useCallback(async () => {
     if (!session) return;
     try {
@@ -165,6 +168,7 @@ function FeedContent() {
   clipsRef.current = clips;
   sessionIdRef.current = sessionId;
   sessionTokenRef.current = session?.access_token ?? "";
+  isGuestRef.current = isGuest;
 
   const goTo = useCallback((idx: number) => {
     const clamped = Math.max(0, Math.min(clipsRef.current.length - 1, idx));
@@ -179,16 +183,57 @@ function FeedContent() {
     if (prev === activeIndex) return;
     const leavingClip = clipsRef.current[prev];
     if (leavingClip) {
-      const watchMs = Date.now() - clipStartRef.current;
-      const durationMs = (leavingClip.duration_seconds ?? 60) * 1000;
       const visits = clipVisitsRef.current[leavingClip.id] ?? 1;
-      recordClipEvent(leavingClip.id, watchMs, watchMs >= durationMs * 0.8, sessionIdRef.current, Math.max(0, visits - 1), null, sessionTokenRef.current);
+      flushClipEvent({
+        clip: leavingClip,
+        startedAt: clipStartRef.current,
+        sessionId: sessionIdRef.current,
+        replayCount: Math.max(0, visits - 1),
+        feedback: null,
+        token: sessionTokenRef.current,
+        keepalive: false,
+        isGuest: isGuestRef.current,
+        lastLoggedRef,
+      });
     }
     prevIndexRef.current = activeIndex;
     clipStartRef.current = Date.now();
     const arrivingClip = clipsRef.current[activeIndex];
     if (arrivingClip) clipVisitsRef.current[arrivingClip.id] = (clipVisitsRef.current[arrivingClip.id] ?? 0) + 1;
   }, [activeIndex]);
+
+  // Flush the CURRENT clip on unmount / tab-close. The activeIndex effect above
+  // only logs a clip when you leave it for another index, so the LAST clip
+  // (navigating Home, tapping a recommendation, or closing the tab) would never
+  // be recorded. The shared lastLoggedRef dedups against the transition path so
+  // the clip is logged exactly once. pagehide + visibilitychange cover tab close
+  // and mobile backgrounding; the cleanup covers SPA route changes.
+  useEffect(() => {
+    const flushCurrent = (keepalive: boolean) => {
+      const clip = clipsRef.current[activeIndexRef.current];
+      const visits = clip ? (clipVisitsRef.current[clip.id] ?? 1) : 1;
+      flushClipEvent({
+        clip,
+        startedAt: clipStartRef.current,
+        sessionId: sessionIdRef.current,
+        replayCount: Math.max(0, visits - 1),
+        feedback: null,
+        token: sessionTokenRef.current,
+        keepalive,
+        isGuest: isGuestRef.current,
+        lastLoggedRef,
+      });
+    };
+    const onPageHide = () => flushCurrent(true);
+    const onVisibility = () => { if (document.visibilityState === "hidden") flushCurrent(true); };
+    window.addEventListener("pagehide", onPageHide);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("pagehide", onPageHide);
+      document.removeEventListener("visibilitychange", onVisibility);
+      flushCurrent(true);
+    };
+  }, []);
 
   // Stable IntersectionObserver — created once, re-observes new clips as count grows
   const observerRef = useRef<IntersectionObserver | null>(null);

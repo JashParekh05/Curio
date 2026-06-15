@@ -4,11 +4,12 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { getDiscoverFeed, recordClipEvent, type Clip } from "@/lib/api";
+import { flushClipEvent, type LastLogged } from "@/lib/clip-telemetry";
 import ReelPlayer from "@/components/ReelPlayer";
 
 export default function DiscoverPage() {
   const router = useRouter();
-  const { user, session, loading } = useAuth();
+  const { user, session, loading, isGuest } = useAuth();
   const [clips, setClips] = useState<Clip[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
   const [fetching, setFetching] = useState(true);
@@ -24,14 +25,13 @@ export default function DiscoverPage() {
   const sessionTokenRef = useRef(session?.access_token ?? "");
   const fetchingMoreRef = useRef(false);
   const seenClipIdsRef = useRef<Set<string>>(new Set());
+  const isGuestRef = useRef(isGuest);
+  const lastLoggedRef = useRef<LastLogged | null>(null);
 
   activeIndexRef.current = activeIndex;
   clipsRef.current = clips;
   sessionTokenRef.current = session?.access_token ?? "";
-
-  useEffect(() => {
-    if (!loading && !user) router.replace("/login");
-  }, [user, loading, router]);
+  isGuestRef.current = isGuest;
 
   useEffect(() => {
     if (!user || !session) return;
@@ -84,13 +84,49 @@ export default function DiscoverPage() {
     if (prev === activeIndex) return;
     const leavingClip = clipsRef.current[prev];
     if (leavingClip) {
-      const watchMs = Date.now() - clipStartRef.current;
-      const durationMs = (leavingClip.duration_seconds ?? 60) * 1000;
-      recordClipEvent(leavingClip.id, watchMs, watchMs >= durationMs * 0.8, null, 0, null, sessionTokenRef.current);
+      flushClipEvent({
+        clip: leavingClip,
+        startedAt: clipStartRef.current,
+        sessionId: null,
+        replayCount: 0,
+        feedback: null,
+        token: sessionTokenRef.current,
+        keepalive: false,
+        isGuest: isGuestRef.current,
+        lastLoggedRef,
+      });
     }
     prevIndexRef.current = activeIndex;
     clipStartRef.current = Date.now();
   }, [activeIndex]);
+
+  // Flush the CURRENT clip on unmount / tab-close so the last clip is recorded
+  // exactly once (the activeIndex effect only logs a clip when leaving it for
+  // another index). Mirrors the path-feed page; discover has no session.
+  useEffect(() => {
+    const flushCurrent = (keepalive: boolean) => {
+      flushClipEvent({
+        clip: clipsRef.current[activeIndexRef.current],
+        startedAt: clipStartRef.current,
+        sessionId: null,
+        replayCount: 0,
+        feedback: null,
+        token: sessionTokenRef.current,
+        keepalive,
+        isGuest: isGuestRef.current,
+        lastLoggedRef,
+      });
+    };
+    const onPageHide = () => flushCurrent(true);
+    const onVisibility = () => { if (document.visibilityState === "hidden") flushCurrent(true); };
+    window.addEventListener("pagehide", onPageHide);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("pagehide", onPageHide);
+      document.removeEventListener("visibilitychange", onVisibility);
+      flushCurrent(true);
+    };
+  }, []);
 
   // Auto-load more when 2 from the end
   useEffect(() => {

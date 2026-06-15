@@ -4,20 +4,22 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/auth-context";
-import { getUserProfile } from "@/lib/api";
 
 export default function LoginPage() {
   const router = useRouter();
-  const { user, loading } = useAuth();
+  const { isAuthenticated, isGuest, loading, upgradeAccount } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [isSignUp, setIsSignUp] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
 
+  // Redirect only real accounts — a guest always has a (anonymous) user, so
+  // gating on `isAuthenticated` lets guests reach this page to sign up / sign in.
+  // Onboarding routing for new accounts is handled by the home page.
   useEffect(() => {
-    if (!loading && user) router.replace("/");
-  }, [user, loading, router]);
+    if (!loading && isAuthenticated) router.replace("/");
+  }, [isAuthenticated, loading, router]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -27,21 +29,30 @@ export default function LoginPage() {
     setError("");
 
     if (isSignUp) {
-      const { data, error: err } = await supabase.auth.signUp({ email: trimmedEmail, password });
-      setSubmitting(false);
-      if (err) { setError(err.message); return; }
-      if (data.user && data.session) {
-        const profile = await getUserProfile(data.user.id, data.session.access_token);
-        router.replace(profile.onboarding_complete ? "/" : "/onboarding");
+      if (isGuest) {
+        // Upgrade the anonymous guest in place so their progress is preserved.
+        const { error: err } = await upgradeAccount(trimmedEmail, password);
+        setSubmitting(false);
+        if (err) {
+          setError(/already|registered|exists/i.test(err)
+            ? "That email already has an account. Switch to Sign in below."
+            : err);
+          return;
+        }
+        // Auth-state flip redirects via the effect above.
+      } else {
+        const { data, error: err } = await supabase.auth.signUp({ email: trimmedEmail, password });
+        setSubmitting(false);
+        if (err) { setError(err.message); return; }
+        if (!data.session) {
+          setError("Account created — check your email to confirm, then sign in.");
+          return;
+        }
       }
     } else {
-      const { data, error: err } = await supabase.auth.signInWithPassword({ email: trimmedEmail, password });
+      const { error: err } = await supabase.auth.signInWithPassword({ email: trimmedEmail, password });
       setSubmitting(false);
       if (err) { setError(err.message); return; }
-      if (data.user && data.session) {
-        const profile = await getUserProfile(data.user.id, data.session.access_token);
-        router.replace(profile.onboarding_complete ? "/" : "/onboarding");
-      }
     }
   }
 
