@@ -12,11 +12,41 @@ html,
 body {
   max-width: 100vw;
   overflow-x: hidden;
-  background: #000;
-  color: #fff;
+  background: #FBF7ED;
+  color: #111111;
 }
 
 /* Hide scrollbar on feed */
 .overflow-y-scroll::-webkit-scrollbar {
   display: none;
+}
+
+@layer components {
+  /* Neo-brutalist building blocks: square corners, thick black borders,
+     hard offset shadows. */
+  .brutal {
+    @apply border-[3px] border-ink rounded-none;
+  }
+  .brutal-card {
+    @apply brutal bg-white shadow-brutal;
+  }
+  /* The satisfying press: hover lifts the button up-left and grows the shadow,
+     active slams it down into where the shadow was (shadow vanishes). */
+  .brutal-btn {
+    @apply brutal font-extrabold shadow-brutal transition-all duration-75 ease-out
+      hover:-translate-x-[2px] hover:-translate-y-[2px] hover:shadow-brutal-lg
+      active:translate-x-[4px] active:translate-y-[4px] active:shadow-none
+      disabled:hover:translate-x-0 disabled:hover:translate-y-0 disabled:hover:shadow-brutal
+      disabled:active:translate-x-0 disabled:active:translate-y-0;
+  }
+  /* Dark-surface variant for the feed chrome (white borders on black). */
+  .brutal-dark {
+    @apply border-2 border-white rounded-none shadow-brutal-white;
+  }
+  /* Clickable dark-chrome buttons get the same tactile press, in white. */
+  .brutal-dark-btn {
+    @apply brutal-dark transition-all duration-75 ease-out
+      hover:-translate-x-[2px] hover:-translate-y-[2px] hover:shadow-[6px_6px_0_0_#fff]
+      active:translate-x-[4px] active:translate-y-[4px] active:shadow-none;
+  }
 }

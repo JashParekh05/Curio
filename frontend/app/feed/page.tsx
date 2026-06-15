@@ -349,18 +349,18 @@ function FeedContent() {
 
   if (initialLoading && clips.length === 0) {
     return (
-      <div className="fixed inset-0 bg-black flex items-center justify-center">
-        <div className="w-12 h-12 border-2 border-zinc-700 border-t-white rounded-full animate-spin" />
+      <div className="fixed inset-0 bg-paper flex items-center justify-center">
+        <div className="w-12 h-12 border-[3px] border-ink border-t-accent-pink rounded-full animate-spin" />
       </div>
     );
   }
 
   if (!sessionId && !topicSlug) {
     return (
-      <div className="min-h-screen bg-black text-white flex items-center justify-center">
+      <div className="min-h-screen bg-paper text-ink flex items-center justify-center">
         <div className="text-center space-y-4">
-          <p className="text-zinc-400">No topic selected.</p>
-          <button onClick={() => router.push("/")} className="text-white underline">Go back</button>
+          <p className="text-ink font-bold">No topic selected.</p>
+          <button onClick={() => router.push("/")} className="brutal-btn bg-accent-yellow text-ink px-6 py-3">Go back</button>
         </div>
       </div>
     );
@@ -369,15 +369,15 @@ function FeedContent() {
   // Network/load error with no clips
   if (loadError && clips.length === 0) {
     return (
-      <div className="fixed inset-0 bg-black flex flex-col items-center justify-center gap-5 text-white px-6">
-        <button onClick={() => router.push("/")} className="absolute top-4 left-4 text-zinc-500 hover:text-white text-sm transition">
-          ← Home
+      <div className="fixed inset-0 bg-paper flex flex-col items-center justify-center gap-5 text-ink px-6">
+        <button onClick={() => router.push("/")} className="brutal-btn bg-white text-ink absolute top-4 left-4 text-sm px-3 py-2">
+          Home
         </button>
-        <p className="text-2xl font-semibold text-center">Couldn't load clips</p>
-        <p className="text-zinc-500 text-sm text-center">Check that the backend is running.</p>
+        <p className="text-3xl font-black text-center">Couldn't load clips</p>
+        <p className="text-ink/60 text-sm text-center font-medium">Check that the backend is running.</p>
         <button
           onClick={() => { setLoadError(false); loadFeed(); }}
-          className="bg-white text-black font-semibold px-6 py-3 rounded-2xl text-sm hover:bg-zinc-100 transition"
+          className="brutal-btn bg-accent-yellow text-ink px-6 py-3 text-sm"
         >
           Retry
         </button>
@@ -388,20 +388,20 @@ function FeedContent() {
   // No clips and timed out
   if (timedOut && clips.length === 0) {
     return (
-      <div className="fixed inset-0 bg-black flex flex-col items-center justify-center gap-5 text-white px-6">
+      <div className="fixed inset-0 bg-paper flex flex-col items-center justify-center gap-5 text-ink px-6">
         <button
           onClick={() => router.push("/")}
-          className="absolute top-4 left-4 text-zinc-500 hover:text-white text-sm transition"
+          className="brutal-btn bg-white text-ink absolute top-4 left-4 text-sm px-3 py-2"
         >
-          ← Home
+          Home
         </button>
-        <p className="text-2xl font-semibold text-center">No clips found</p>
-        <p className="text-zinc-500 text-sm text-center">Try a different topic — we may not have content for this one yet.</p>
+        <p className="text-3xl font-black text-center">No clips found</p>
+        <p className="text-ink/60 text-sm text-center font-medium">Try a different topic — we may not have content for this one yet.</p>
         <button
           onClick={() => router.push("/")}
-          className="bg-white text-black font-semibold px-6 py-3 rounded-2xl text-sm hover:bg-zinc-100 transition"
+          className="brutal-btn bg-accent-yellow text-ink px-6 py-3 text-sm"
         >
-          Try another topic →
+          Try another topic
         </button>
       </div>
     );
@@ -410,17 +410,17 @@ function FeedContent() {
   // Pure loading (no clips at all yet)
   if (processing && clips.length === 0) {
     return (
-      <div className="fixed inset-0 bg-black flex flex-col items-center justify-center gap-5 text-white">
+      <div className="fixed inset-0 bg-paper flex flex-col items-center justify-center gap-5 text-ink">
         <button
           onClick={() => router.push("/")}
-          className="absolute top-4 left-4 text-zinc-500 hover:text-white text-sm transition"
+          className="brutal-btn bg-white text-ink absolute top-4 left-4 text-sm px-3 py-2"
         >
-          ← Home
+          Home
         </button>
-        <div className="w-12 h-12 border-2 border-zinc-700 border-t-white rounded-full animate-spin" />
+        <div className="w-12 h-12 border-[3px] border-ink border-t-accent-pink rounded-full animate-spin" />
         <div className="text-center space-y-1">
-          <p className="text-white font-medium">Finding clips for you</p>
-          <p className="text-zinc-500 text-sm">Hang tight…</p>
+          <p className="text-ink font-extrabold">Finding clips for you</p>
+          <p className="text-ink/60 text-sm font-medium">Hang tight</p>
         </div>
       </div>
     );
@@ -432,26 +432,25 @@ function FeedContent() {
       <div className="absolute top-0 inset-x-0 z-20 flex items-center justify-between px-4 pt-4 pb-2 pointer-events-none">
         <button
           onClick={() => router.push("/")}
-          className="pointer-events-auto text-white bg-black/40 backdrop-blur-sm rounded-full px-3 py-1.5 text-sm leading-none"
+          className="pointer-events-auto brutal-dark-btn bg-ink text-white font-bold px-3 py-1.5 text-sm leading-none"
         >
-          ← Home
+          Home
         </button>
 
         {activeTopicName && (
-          <span className="text-white/70 text-xs font-medium tracking-wide max-w-[45%] truncate">
+          <span className="brutal-dark bg-accent-purple text-white text-xs font-bold tracking-wide px-2 py-1 max-w-[40%] truncate">
             {activeTopicName}
           </span>
         )}
 
-        <span className="text-zinc-500 text-xs tabular-nums flex items-center gap-2 pointer-events-auto">
-          {clips.length > 0 ? `${activeIndex + 1} / ${clips.length}` : ""}
-          {processing && clips.length > 0 && (
-            <span className="ml-1 text-amber-400">•</span>
-          )}
+        <span className="text-white text-xs tabular-nums flex items-center gap-2 pointer-events-auto">
+          {clips.length > 0 ? (
+            <span className="brutal-dark bg-ink px-2 py-1 font-bold">{activeIndex + 1} / {clips.length}</span>
+          ) : ""}
           {activeTopicSlug && (
             <button
               onClick={handleShare}
-              className="text-white bg-black/40 backdrop-blur-sm rounded-full px-3 py-1.5 text-xs leading-none"
+              className="brutal-dark-btn bg-accent-cyan text-ink font-bold px-3 py-1.5 text-xs leading-none"
             >
               Share
             </button>
@@ -459,7 +458,7 @@ function FeedContent() {
           {sessionId && orderedTopics.length > 0 && (
             <button
               onClick={() => setShowPlan(true)}
-              className="text-white bg-black/40 backdrop-blur-sm rounded-full px-3 py-1.5 text-xs leading-none"
+              className="brutal-dark-btn bg-accent-yellow text-ink font-bold px-3 py-1.5 text-xs leading-none"
             >
               Plan
             </button>
@@ -480,7 +479,7 @@ function FeedContent() {
 
       {shareToast && (
         <div className="absolute bottom-8 inset-x-0 z-40 flex justify-center pointer-events-none">
-          <div className="bg-white text-black text-sm font-medium rounded-full px-4 py-2 shadow-lg">
+          <div className="brutal bg-accent-yellow text-ink text-sm font-bold px-4 py-2 shadow-brutal">
             {shareToast}
           </div>
         </div>
@@ -492,14 +491,14 @@ function FeedContent() {
           <button
             onClick={() => goTo(activeIndex - 1)}
             disabled={activeIndex === 0}
-            className="w-9 h-9 rounded-full bg-black/40 backdrop-blur-sm border border-zinc-700 flex items-center justify-center text-white disabled:opacity-20 hover:bg-black/60 transition active:scale-95"
+            className="brutal-dark-btn bg-ink w-9 h-9 flex items-center justify-center text-white disabled:opacity-20 disabled:translate-x-0 disabled:translate-y-0 disabled:shadow-brutal-white"
           >
             ▲
           </button>
           <button
             onClick={() => goTo(activeIndex + 1)}
             disabled={activeIndex >= clips.length}
-            className="w-9 h-9 rounded-full bg-black/40 backdrop-blur-sm border border-zinc-700 flex items-center justify-center text-white disabled:opacity-20 hover:bg-black/60 transition active:scale-95"
+            className="brutal-dark-btn bg-ink w-9 h-9 flex items-center justify-center text-white disabled:opacity-20 disabled:translate-x-0 disabled:translate-y-0 disabled:shadow-brutal-white"
           >
             ▼
           </button>
@@ -508,9 +507,9 @@ function FeedContent() {
 
       {/* Progress bar */}
       {clips.length > 0 && (
-        <div className="absolute top-0 inset-x-0 z-30 h-0.5 bg-zinc-800">
+        <div className="absolute top-0 inset-x-0 z-30 h-1 bg-ink">
           <div
-            className="h-full bg-white transition-all duration-300"
+            className="h-full bg-accent-lime transition-all duration-300"
             style={{ width: `${((activeIndex + 1) / clips.length) * 100}%` }}
           />
         </div>
@@ -558,23 +557,23 @@ function FeedContent() {
         {/* End card */}
         {clips.length > 0 && !processing && (
           <div className="snap-start snap-always" style={{ height: "100dvh" }}>
-            <div className="h-full flex flex-col items-center justify-center gap-5 bg-black text-white px-6">
-              <p className="text-2xl font-semibold text-center">You finished this topic.</p>
-              <p className="text-zinc-500 text-sm text-center">
+            <div className="h-full flex flex-col items-center justify-center gap-5 bg-paper text-ink px-6">
+              <p className="text-3xl font-black text-center">You finished this topic.</p>
+              <p className="text-ink/60 text-sm text-center font-medium">
                 You watched {clips.length} clip{clips.length !== 1 ? "s" : ""}.
               </p>
               {recommendations.length > 0 ? (
                 <>
-                  <p className="text-zinc-400 text-sm font-medium">What to learn next:</p>
+                  <p className="text-ink text-xs font-black uppercase tracking-wide">What to learn next</p>
                   <div className="w-full max-w-sm space-y-3">
-                    {recommendations.map((rec) => (
+                    {recommendations.map((rec, ri) => (
                       <button
                         key={rec.slug}
                         onClick={() => router.push(`/feed?topic=${rec.slug}`)}
-                        className="w-full text-left bg-zinc-900 border border-zinc-800 rounded-2xl px-4 py-3 hover:bg-zinc-800 active:scale-95 transition"
+                        className={`brutal-btn w-full text-left ${["bg-accent-yellow","bg-accent-cyan","bg-accent-lime","bg-accent-pink"][ri % 4]} text-ink px-4 py-3`}
                       >
-                        <p className="text-white font-semibold text-sm">{rec.name}</p>
-                        <p className="text-zinc-500 text-xs mt-0.5">{rec.clip_count} clips · {rec.difficulty}</p>
+                        <p className="font-bold text-sm">{rec.name}</p>
+                        <p className="text-ink/60 text-xs mt-0.5 font-medium">{rec.clip_count} clips · {rec.difficulty}</p>
                       </button>
                     ))}
                   </div>
@@ -582,9 +581,9 @@ function FeedContent() {
               ) : (
                 <button
                   onClick={() => router.push("/")}
-                  className="bg-white text-black font-semibold px-6 py-3 rounded-2xl text-sm hover:bg-zinc-100 transition"
+                  className="brutal-btn bg-accent-yellow text-ink px-6 py-3 text-sm"
                 >
-                  Learn something new →
+                  Learn something new
                 </button>
               )}
             </div>
@@ -594,9 +593,9 @@ function FeedContent() {
         {/* Still loading more */}
         {clips.length > 0 && processing && (
           <div className="snap-start snap-always" style={{ height: "100dvh" }}>
-            <div className="h-full flex flex-col items-center justify-center gap-4 bg-black text-white">
-              <div className="w-8 h-8 border-2 border-zinc-700 border-t-white rounded-full animate-spin" />
-              <p className="text-zinc-500 text-sm">Loading more clips…</p>
+            <div className="h-full flex flex-col items-center justify-center gap-4 bg-paper text-ink">
+              <div className="w-8 h-8 border-[3px] border-ink border-t-accent-pink rounded-full animate-spin" />
+              <p className="text-ink/60 text-sm font-bold">Loading more clips</p>
             </div>
           </div>
         )}
@@ -609,8 +608,8 @@ export default function FeedPage() {
   return (
     <Suspense
       fallback={
-        <div className="fixed inset-0 bg-black flex items-center justify-center">
-          <div className="w-12 h-12 border-2 border-zinc-700 border-t-white rounded-full animate-spin" />
+        <div className="fixed inset-0 bg-paper flex items-center justify-center">
+          <div className="w-12 h-12 border-[3px] border-ink border-t-accent-pink rounded-full animate-spin" />
         </div>
       }
     >

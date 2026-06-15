@@ -6,19 +6,22 @@ import { useAuth } from "@/lib/auth-context";
 import { setUserInterests } from "@/lib/api";
 
 const INTEREST_TAGS = [
-  { label: "Science", emoji: "🔬" },
-  { label: "History", emoji: "📜" },
-  { label: "Math", emoji: "📐" },
-  { label: "Technology", emoji: "💻" },
-  { label: "Space", emoji: "🚀" },
-  { label: "Biology", emoji: "🧬" },
-  { label: "Philosophy", emoji: "🧠" },
-  { label: "Economics", emoji: "📈" },
-  { label: "Engineering", emoji: "⚙️" },
-  { label: "Art", emoji: "🎨" },
-  { label: "Psychology", emoji: "💭" },
-  { label: "Language", emoji: "🗣️" },
+  "Science",
+  "History",
+  "Math",
+  "Technology",
+  "Space",
+  "Biology",
+  "Philosophy",
+  "Economics",
+  "Engineering",
+  "Art",
+  "Psychology",
+  "Language",
 ];
+
+// Rotating accent fills for selected interest tiles.
+const TAG_COLORS = ["bg-accent-yellow", "bg-accent-cyan", "bg-accent-lime", "bg-accent-pink", "bg-accent-orange", "bg-accent-purple"];
 
 const GRADE_LEVELS = [
   { label: "Preschool", value: "preschool" },
@@ -58,25 +61,23 @@ export default function OnboardingPage() {
   const canContinue = grade !== null && selected.size >= 3;
 
   return (
-    <div className="min-h-screen bg-black text-white flex flex-col items-center justify-center px-4 py-12">
+    <div className="min-h-screen bg-paper text-ink flex flex-col items-center justify-center px-4 py-12">
       <div className="w-full max-w-md space-y-8">
         <div className="text-center space-y-2">
-          <h1 className="text-3xl font-bold">Personalize your feed</h1>
-          <p className="text-zinc-400 text-sm">We&apos;ll match content to your level and interests</p>
+          <h1 className="text-4xl font-black">Personalize your feed</h1>
+          <p className="text-ink/70 text-sm font-medium">We&apos;ll match content to your level and interests</p>
         </div>
 
         {/* Grade level */}
         <div className="space-y-3">
-          <p className="text-sm font-medium text-zinc-300">What&apos;s your level?</p>
+          <p className="text-sm font-black uppercase tracking-wide text-ink/60">What&apos;s your level?</p>
           <div className="grid grid-cols-3 gap-2">
             {GRADE_LEVELS.map(({ label, value }) => (
               <button
                 key={value}
                 onClick={() => setGrade(value)}
-                className={`rounded-2xl px-3 py-3 text-sm font-medium transition active:scale-95 ${
-                  grade === value
-                    ? "bg-white text-black"
-                    : "bg-zinc-900 text-zinc-300 border border-zinc-800 hover:border-zinc-600"
+                className={`brutal-btn px-3 py-3 text-sm ${
+                  grade === value ? "bg-accent-purple text-white" : "bg-white text-ink"
                 }`}
               >
                 {label}
@@ -87,22 +88,19 @@ export default function OnboardingPage() {
 
         {/* Interests */}
         <div className="space-y-3">
-          <p className="text-sm font-medium text-zinc-300">What are you into? <span className="text-zinc-500">(pick 3+)</span></p>
+          <p className="text-sm font-black uppercase tracking-wide text-ink/60">What are you into? <span className="text-ink/40">(pick 3+)</span></p>
           <div className="grid grid-cols-3 gap-3">
-            {INTEREST_TAGS.map(({ label, emoji }) => {
+            {INTEREST_TAGS.map((label, i) => {
               const active = selected.has(label);
               return (
                 <button
                   key={label}
                   onClick={() => toggle(label)}
-                  className={`flex flex-col items-center gap-1.5 rounded-2xl px-3 py-4 text-sm font-medium transition active:scale-95 ${
-                    active
-                      ? "bg-white text-black"
-                      : "bg-zinc-900 text-zinc-300 border border-zinc-800 hover:border-zinc-600"
+                  className={`brutal-btn px-3 py-4 text-sm ${
+                    active ? `${TAG_COLORS[i % TAG_COLORS.length]} text-ink` : "bg-white text-ink"
                   }`}
                 >
-                  <span className="text-2xl">{emoji}</span>
-                  <span>{label}</span>
+                  {label}
                 </button>
               );
             })}
@@ -110,24 +108,24 @@ export default function OnboardingPage() {
         </div>
 
         {!grade && selected.size >= 3 && (
-          <p className="text-center text-zinc-500 text-sm -mt-4">Select your level to continue</p>
+          <p className="text-center text-ink/60 text-sm font-bold -mt-4">Select your level to continue</p>
         )}
         {grade && selected.size > 0 && selected.size < 3 && (
-          <p className="text-center text-zinc-500 text-sm -mt-4">Pick {3 - selected.size} more to continue</p>
+          <p className="text-center text-ink/60 text-sm font-bold -mt-4">Pick {3 - selected.size} more to continue</p>
         )}
 
         <button
           onClick={handleContinue}
           disabled={!canContinue || saving}
-          className="w-full bg-white text-black font-semibold py-4 rounded-xl text-base disabled:opacity-40 hover:bg-zinc-100 transition"
+          className="brutal-btn w-full bg-accent-yellow text-ink py-4 text-base disabled:opacity-40"
         >
-          {saving ? "Saving…" : "Start learning"}
+          {saving ? "Saving..." : "Start learning"}
         </button>
 
         <button
           onClick={() => router.replace("/")}
           disabled={saving}
-          className="w-full text-zinc-500 hover:text-white text-sm py-1 transition"
+          className="w-full text-ink/50 hover:text-ink text-sm font-bold py-1 transition"
         >
           Skip for now
         </button>

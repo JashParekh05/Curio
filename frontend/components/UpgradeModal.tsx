@@ -34,20 +34,20 @@ export default function UpgradeModal({ open, onClose }: { open: boolean; onClose
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-sm px-4"
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-ink/60 px-4"
       onClick={onClose}
     >
       <div
-        className="w-full max-w-sm bg-zinc-900 border border-zinc-800 rounded-2xl p-6 space-y-5 mb-4 sm:mb-0"
+        className="brutal w-full max-w-sm bg-paper p-6 space-y-5 mb-4 sm:mb-0 shadow-brutal-lg"
         onClick={(e) => e.stopPropagation()}
       >
         {done ? (
           <div className="text-center space-y-3">
-            <p className="text-white text-lg font-semibold">You&apos;re all set 🎉</p>
-            <p className="text-zinc-400 text-sm">Your progress is saved to your new account.</p>
+            <p className="text-ink text-lg font-black">You&apos;re all set</p>
+            <p className="text-ink/70 text-sm font-medium">Your progress is saved to your new account.</p>
             <button
               onClick={onClose}
-              className="w-full bg-white text-black font-semibold py-3 rounded-xl hover:bg-zinc-100 transition"
+              className="brutal-btn w-full bg-accent-lime text-ink py-3"
             >
               Done
             </button>
@@ -55,8 +55,8 @@ export default function UpgradeModal({ open, onClose }: { open: boolean; onClose
         ) : (
           <>
             <div className="space-y-1">
-              <p className="text-white text-lg font-semibold">Save your progress</p>
-              <p className="text-zinc-400 text-sm">
+              <p className="text-ink text-lg font-black">Save your progress</p>
+              <p className="text-ink/70 text-sm font-medium">
                 Create a free account to keep your learning history across devices. Your current
                 progress carries over.
               </p>
@@ -69,7 +69,7 @@ export default function UpgradeModal({ open, onClose }: { open: boolean; onClose
                 onChange={(e) => setEmail(e.target.value)}
                 disabled={submitting}
                 autoFocus
-                className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-4 py-3 text-white placeholder-zinc-500 focus:outline-none focus:border-zinc-400"
+                className="brutal w-full bg-white px-4 py-3 text-ink placeholder-ink/40 font-medium focus:outline-none focus:shadow-brutal"
               />
               <input
                 type="password"
@@ -77,18 +77,18 @@ export default function UpgradeModal({ open, onClose }: { open: boolean; onClose
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 disabled={submitting}
-                className="w-full bg-zinc-950 border border-zinc-700 rounded-xl px-4 py-3 text-white placeholder-zinc-500 focus:outline-none focus:border-zinc-400"
+                className="brutal w-full bg-white px-4 py-3 text-ink placeholder-ink/40 font-medium focus:outline-none focus:shadow-brutal"
               />
               <button
                 type="submit"
                 disabled={submitting || !email.trim() || !password}
-                className="w-full bg-white text-black font-semibold py-3 rounded-xl disabled:opacity-40 hover:bg-zinc-100 transition"
+                className="brutal-btn w-full bg-accent-yellow text-ink py-3 disabled:opacity-40"
               >
-                {submitting ? "…" : "Create account"}
+                {submitting ? "..." : "Create account"}
               </button>
-              {error && <p className="text-red-400 text-sm text-center">{error}</p>}
+              {error && <div className="brutal bg-accent-pink text-white text-sm font-bold px-3 py-2 text-center">{error}</div>}
             </form>
-            <button onClick={onClose} className="w-full text-zinc-500 hover:text-white text-sm transition">
+            <button onClick={onClose} className="w-full text-ink/50 hover:text-ink text-sm font-bold transition">
               Not now
             </button>
           </>

@@ -38,14 +38,14 @@ export default function GuestGate() {
     <>
       {showBanner && (
         <div className="fixed bottom-4 inset-x-4 z-40 flex justify-center pointer-events-none">
-          <div className="pointer-events-auto flex items-center gap-3 bg-white text-black rounded-2xl px-4 py-3 shadow-2xl max-w-sm w-full">
+          <div className="pointer-events-auto brutal flex items-center gap-3 bg-accent-yellow text-ink px-4 py-3 shadow-brutal max-w-sm w-full">
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-semibold">Save your progress</p>
-              <p className="text-xs text-zinc-600">Create a free account to keep your history.</p>
+              <p className="text-sm font-black">Save your progress</p>
+              <p className="text-xs text-ink/70 font-medium">Create a free account to keep your history.</p>
             </div>
             <button
               onClick={() => setModalOpen(true)}
-              className="bg-black text-white text-sm font-semibold px-3 py-2 rounded-xl hover:bg-zinc-800 transition shrink-0"
+              className="brutal-btn bg-ink text-white text-sm px-3 py-2 shadow-brutal-sm shrink-0"
             >
               Sign up
             </button>
@@ -55,9 +55,9 @@ export default function GuestGate() {
                 setShow(false);
               }}
               aria-label="Dismiss"
-              className="text-zinc-400 hover:text-zinc-600 text-lg leading-none shrink-0"
+              className="text-ink/60 hover:text-ink text-lg font-black leading-none shrink-0"
             >
-              ✕
+              X
             </button>
           </div>
         </div>

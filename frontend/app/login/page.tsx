@@ -59,11 +59,11 @@ export default function LoginPage() {
   if (loading) return null;
 
   return (
-    <main className="min-h-screen bg-black text-white flex flex-col items-center justify-center px-4">
+    <main className="min-h-screen bg-paper text-ink flex flex-col items-center justify-center px-4">
       <div className="w-full max-w-sm space-y-8">
         <div className="text-center space-y-2">
-          <h1 className="text-4xl font-bold tracking-tight">Curio</h1>
-          <p className="text-zinc-400">{isSignUp ? "Create an account" : "Sign in to track your progress"}</p>
+          <h1 className="text-5xl font-black tracking-tight">Curio<span className="text-accent-pink">.</span></h1>
+          <p className="text-ink/70 font-medium">{isSignUp ? "Create an account" : "Sign in to track your progress"}</p>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -73,7 +73,7 @@ export default function LoginPage() {
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             disabled={submitting}
-            className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-4 py-3 text-white placeholder-zinc-500 focus:outline-none focus:border-zinc-400"
+            className="brutal w-full bg-white px-4 py-3 text-ink placeholder-ink/40 font-medium focus:outline-none focus:shadow-brutal"
             autoFocus
           />
           <input
@@ -82,21 +82,21 @@ export default function LoginPage() {
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             disabled={submitting}
-            className="w-full bg-zinc-900 border border-zinc-700 rounded-xl px-4 py-3 text-white placeholder-zinc-500 focus:outline-none focus:border-zinc-400"
+            className="brutal w-full bg-white px-4 py-3 text-ink placeholder-ink/40 font-medium focus:outline-none focus:shadow-brutal"
           />
           <button
             type="submit"
             disabled={submitting || !email.trim() || !password}
-            className="w-full bg-white text-black font-semibold py-3 rounded-xl disabled:opacity-40 hover:bg-zinc-100 transition"
+            className="brutal-btn w-full bg-accent-yellow text-ink py-3 text-lg disabled:opacity-40"
           >
-            {submitting ? "…" : isSignUp ? "Create account" : "Sign in"}
+            {submitting ? "..." : isSignUp ? "Create account" : "Sign in"}
           </button>
-          {error && <p className="text-red-400 text-sm text-center">{error}</p>}
+          {error && <div className="brutal bg-accent-pink text-white text-sm font-bold px-3 py-2 text-center">{error}</div>}
         </form>
 
         <button
           onClick={() => { setIsSignUp(!isSignUp); setError(""); }}
-          className="w-full text-zinc-500 hover:text-white text-sm transition text-center"
+          className="w-full text-ink/60 hover:text-ink text-sm font-bold transition text-center"
         >
           {isSignUp ? "Already have an account? Sign in" : "No account? Sign up"}
         </button>

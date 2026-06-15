@@ -209,19 +209,19 @@ export default function DiscoverPage() {
 
   const readyToast = readySession ? (
     <div className="absolute bottom-8 inset-x-4 z-30 flex justify-center">
-      <div className="flex items-center gap-3 bg-white text-black rounded-2xl px-4 py-3 shadow-2xl">
+      <div className="brutal flex items-center gap-3 bg-accent-yellow text-ink px-4 py-3 shadow-brutal">
         <button
           onClick={() => router.push(`/feed?session=${readySession}`)}
-          className="text-sm font-semibold"
+          className="text-sm font-bold"
         >
-          Your learning path is ready →
+          Your learning path is ready
         </button>
         <button
           onClick={() => setReadySession(null)}
-          className="text-zinc-400 hover:text-zinc-600 text-xs leading-none"
+          className="text-ink/60 hover:text-ink text-xs font-black leading-none"
           aria-label="Dismiss"
         >
-          ✕
+          X
         </button>
       </div>
     </div>
@@ -229,12 +229,12 @@ export default function DiscoverPage() {
 
   if (fetching) {
     return (
-      <div className="fixed inset-0 bg-black flex flex-col items-center justify-center gap-5 text-white">
-        <button onClick={() => router.push("/")} className="absolute top-4 left-4 text-zinc-500 hover:text-white text-sm transition">
-          ← Home
+      <div className="fixed inset-0 bg-paper flex flex-col items-center justify-center gap-5 text-ink">
+        <button onClick={() => router.push("/")} className="brutal-btn bg-white text-ink absolute top-4 left-4 text-sm px-3 py-2">
+          Home
         </button>
-        <div className="w-12 h-12 border-2 border-zinc-700 border-t-white rounded-full animate-spin" />
-        <p className="text-zinc-500 text-sm">Loading your feed…</p>
+        <div className="w-12 h-12 border-[3px] border-ink border-t-accent-pink rounded-full animate-spin" />
+        <p className="text-ink/60 text-sm font-bold">Loading your feed</p>
         {readyToast}
       </div>
     );
@@ -243,28 +243,28 @@ export default function DiscoverPage() {
   if (clips.length === 0) {
     if (coldStartTimedOut) {
       return (
-        <div className="fixed inset-0 bg-black flex flex-col items-center justify-center gap-5 text-white px-6">
-          <button onClick={() => router.push("/")} className="absolute top-4 left-4 text-zinc-500 hover:text-white text-sm transition">
-            ← Home
+        <div className="fixed inset-0 bg-paper flex flex-col items-center justify-center gap-5 text-ink px-6">
+          <button onClick={() => router.push("/")} className="brutal-btn bg-white text-ink absolute top-4 left-4 text-sm px-3 py-2">
+            Home
           </button>
-          <p className="text-2xl font-semibold text-center">Nothing to discover yet</p>
-          <p className="text-zinc-500 text-sm text-center">Try learning a few topics first — we'll find more content for you.</p>
-          <button onClick={() => router.push("/")} className="bg-white text-black font-semibold px-6 py-3 rounded-2xl text-sm hover:bg-zinc-100 transition">
-            Start learning →
+          <p className="text-3xl font-black text-center">Nothing to discover yet</p>
+          <p className="text-ink/60 text-sm text-center font-medium">Try learning a few topics first — we'll find more content for you.</p>
+          <button onClick={() => router.push("/")} className="brutal-btn bg-accent-yellow text-ink px-6 py-3 text-sm">
+            Start learning
           </button>
           {readyToast}
         </div>
       );
     }
     return (
-      <div className="fixed inset-0 bg-black flex flex-col items-center justify-center gap-5 text-white">
-        <button onClick={() => router.push("/")} className="absolute top-4 left-4 text-zinc-500 hover:text-white text-sm transition">
-          ← Home
+      <div className="fixed inset-0 bg-paper flex flex-col items-center justify-center gap-5 text-ink">
+        <button onClick={() => router.push("/")} className="brutal-btn bg-white text-ink absolute top-4 left-4 text-sm px-3 py-2">
+          Home
         </button>
-        <div className="w-12 h-12 border-2 border-zinc-700 border-t-white rounded-full animate-spin" />
+        <div className="w-12 h-12 border-[3px] border-ink border-t-accent-pink rounded-full animate-spin" />
         <div className="text-center space-y-1">
-          <p className="text-white font-medium">Building your feed</p>
-          <p className="text-zinc-500 text-sm">Finding clips for your interests…</p>
+          <p className="text-ink font-extrabold">Building your feed</p>
+          <p className="text-ink/60 text-sm font-medium">Finding clips for your interests</p>
         </div>
         {readyToast}
       </div>
@@ -277,16 +277,16 @@ export default function DiscoverPage() {
       <div className="absolute top-0 inset-x-0 z-20 flex items-center justify-between px-4 pt-4 pb-2 pointer-events-none">
         <button
           onClick={() => router.push("/")}
-          className="pointer-events-auto text-white bg-black/40 backdrop-blur-sm rounded-full px-3 py-1.5 text-sm leading-none"
+          className="pointer-events-auto brutal-dark-btn bg-ink text-white font-bold px-3 py-1.5 text-sm leading-none"
         >
-          ← Home
+          Home
         </button>
-        <span className="text-white/70 text-xs font-medium tracking-wide">Discover</span>
-        <span className="text-zinc-500 text-xs tabular-nums flex items-center gap-2 pointer-events-auto">
-          {activeIndex + 1} / {clips.length}
+        <span className="brutal-dark bg-accent-orange text-ink text-xs font-bold tracking-wide px-2 py-1">Discover</span>
+        <span className="text-white text-xs tabular-nums flex items-center gap-2 pointer-events-auto">
+          <span className="brutal-dark bg-ink px-2 py-1 font-bold">{activeIndex + 1} / {clips.length}</span>
           <button
             onClick={handleShare}
-            className="text-white bg-black/40 backdrop-blur-sm rounded-full px-3 py-1.5 text-xs leading-none"
+            className="brutal-dark-btn bg-accent-cyan text-ink font-bold px-3 py-1.5 text-xs leading-none"
           >
             Share
           </button>
@@ -298,14 +298,14 @@ export default function DiscoverPage() {
         <button
           onClick={() => goTo(activeIndex - 1)}
           disabled={activeIndex === 0}
-          className="w-9 h-9 rounded-full bg-black/40 backdrop-blur-sm border border-zinc-700 flex items-center justify-center text-white disabled:opacity-20 hover:bg-black/60 transition active:scale-95"
+          className="brutal-dark-btn bg-ink w-9 h-9 flex items-center justify-center text-white disabled:opacity-20 disabled:translate-x-0 disabled:translate-y-0 disabled:shadow-brutal-white"
         >
           ▲
         </button>
         <button
           onClick={() => goTo(activeIndex + 1)}
           disabled={activeIndex >= clips.length}
-          className="w-9 h-9 rounded-full bg-black/40 backdrop-blur-sm border border-zinc-700 flex items-center justify-center text-white disabled:opacity-20 hover:bg-black/60 transition active:scale-95"
+          className="brutal-dark-btn bg-ink w-9 h-9 flex items-center justify-center text-white disabled:opacity-20 disabled:translate-x-0 disabled:translate-y-0 disabled:shadow-brutal-white"
         >
           ▼
         </button>
@@ -316,16 +316,16 @@ export default function DiscoverPage() {
 
       {shareToast && (
         <div className="absolute bottom-8 inset-x-0 z-40 flex justify-center pointer-events-none">
-          <div className="bg-white text-black text-sm font-medium rounded-full px-4 py-2 shadow-lg">
+          <div className="brutal bg-accent-yellow text-ink text-sm font-bold px-4 py-2 shadow-brutal">
             {shareToast}
           </div>
         </div>
       )}
 
       {/* Progress bar */}
-      <div className="absolute top-0 inset-x-0 z-30 h-0.5 bg-zinc-800">
+      <div className="absolute top-0 inset-x-0 z-30 h-1 bg-ink">
         <div
-          className="h-full bg-white transition-all duration-300"
+          className="h-full bg-accent-lime transition-all duration-300"
           style={{ width: `${((activeIndex + 1) / clips.length) * 100}%` }}
         />
       </div>
@@ -347,14 +347,14 @@ export default function DiscoverPage() {
 
         {/* End card */}
         <div className="snap-start snap-always" style={{ height: "100dvh" }}>
-          <div className="h-full flex flex-col items-center justify-center gap-5 bg-black text-white px-6">
-            <p className="text-2xl font-semibold text-center">You&apos;re all caught up</p>
-            <p className="text-zinc-500 text-sm text-center">Want to go deeper on something?</p>
+          <div className="h-full flex flex-col items-center justify-center gap-5 bg-paper text-ink px-6">
+            <p className="text-3xl font-black text-center">You&apos;re all caught up</p>
+            <p className="text-ink/60 text-sm text-center font-medium">Want to go deeper on something?</p>
             <button
               onClick={() => router.push("/")}
-              className="bg-white text-black font-semibold px-6 py-3 rounded-2xl text-sm hover:bg-zinc-100 transition"
+              className="brutal-btn bg-accent-yellow text-ink px-6 py-3 text-sm"
             >
-              Learn something specific →
+              Learn something specific
             </button>
             <button
               disabled={loadingMore}
@@ -369,9 +369,9 @@ export default function DiscoverPage() {
                   })
                   .finally(() => setLoadingMore(false));
               }}
-              className="text-zinc-500 text-sm hover:text-white transition disabled:opacity-40"
+              className="brutal-btn bg-white text-ink px-5 py-2.5 text-sm disabled:opacity-40"
             >
-              {loadingMore ? "Loading…" : "Load more clips"}
+              {loadingMore ? "Loading" : "Load more clips"}
             </button>
           </div>
         </div>
