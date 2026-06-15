@@ -1,11 +1,12 @@
 "use client";
 
-import { Suspense, useEffect, useRef, useState, useCallback } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { getPathFeed, getTopicFeed, recordClipEvent, getRecommendations, type Clip, type FeedResponse, type TopicRecommendation } from "@/lib/api";
 import { flushClipEvent, type LastLogged } from "@/lib/clip-telemetry";
 import ReelPlayer from "@/components/ReelPlayer";
+import PlanPanel from "@/components/PlanPanel";
 
 const POLL_INTERVAL_MS = 4000;
 
@@ -28,6 +29,7 @@ function FeedContent() {
   const [timedOut, setTimedOut] = useState(false);
   const [loadError, setLoadError] = useState(false);
   const [recommendations, setRecommendations] = useState<TopicRecommendation[]>([]);
+  const [showPlan, setShowPlan] = useState(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const pollingRef = useRef<NodeJS.Timeout | undefined>(undefined);
@@ -286,6 +288,41 @@ function FeedContent() {
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
     .join(" ");
 
+  // Ordered, de-duplicated topics for the plan overlay, in feed order.
+  const orderedTopics = useMemo(() => {
+    const seen = new Set<string>();
+    const out: { slug: string; name: string }[] = [];
+    for (const c of clips) {
+      const slug = topicLabels[c.id];
+      if (slug && !seen.has(slug)) {
+        seen.add(slug);
+        out.push({
+          slug,
+          name: slug.split("-").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" "),
+        });
+      }
+    }
+    return out;
+  }, [clips, topicLabels]);
+
+  // Jump to a topic (or a specific section) from the plan overlay. Prefer an
+  // in-place scroll to the already-loaded clip; fall back to a route navigation
+  // with start params when that beat hasn't been fetched yet.
+  const jumpToPlan = useCallback((slug: string, sectionIndex: number | null) => {
+    const idx = clips.findIndex(
+      (c) => topicLabels[c.id] === slug && (sectionIndex === null || c.section_index === sectionIndex),
+    );
+    if (idx >= 0) {
+      goTo(idx);
+    } else if (sessionId) {
+      const extra = sectionIndex !== null
+        ? `&start_topic=${slug}&start_section=${sectionIndex}`
+        : `&start_topic=${slug}`;
+      router.push(`/feed?session=${sessionId}${extra}`);
+    }
+    setShowPlan(false);
+  }, [clips, topicLabels, goTo, sessionId, router]);
+
   if (initialLoading && clips.length === 0) {
     return (
       <div className="fixed inset-0 bg-black flex items-center justify-center">
@@ -382,13 +419,31 @@ function FeedContent() {
           </span>
         )}
 
-        <span className="text-zinc-500 text-xs tabular-nums">
+        <span className="text-zinc-500 text-xs tabular-nums flex items-center gap-2 pointer-events-auto">
           {clips.length > 0 ? `${activeIndex + 1} / ${clips.length}` : ""}
           {processing && clips.length > 0 && (
             <span className="ml-1 text-amber-400">•</span>
           )}
+          {sessionId && orderedTopics.length > 0 && (
+            <button
+              onClick={() => setShowPlan(true)}
+              className="text-white bg-black/40 backdrop-blur-sm rounded-full px-3 py-1.5 text-xs leading-none"
+            >
+              Plan
+            </button>
+          )}
         </span>
       </div>
+
+      {sessionId && (
+        <PlanPanel
+          open={showPlan}
+          onClose={() => setShowPlan(false)}
+          topics={orderedTopics}
+          activeSlug={activeTopicSlug}
+          onJump={jumpToPlan}
+        />
+      )}
 
       {/* Nav arrows */}
       {clips.length > 0 && (
