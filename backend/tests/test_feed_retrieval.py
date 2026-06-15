@@ -1,6 +1,6 @@
-"""Fake-DB tests for _fetch_clips_for_slug: section sampling, seen filtering,
-fallback, and that delivery comes out arc-ordered."""
-from app.services.feed_retrieval import _fetch_clips_for_slug
+"""Fake-DB tests for _fetch_clips_for_slug and _fetch_discover_clips:
+section sampling, seen filtering, fallback, arc/personalized ordering."""
+from app.services.feed_retrieval import _fetch_clips_for_slug, _fetch_discover_clips
 
 
 class _Result:
@@ -109,4 +109,54 @@ class TestFetchClipsForSlug:
     def test_all_clips_seen_returns_empty(self):
         clips = [_clip("c0", 0), _clip("c1", 1)]
         out = _fetch_clips_for_slug(_db(clips), "t", seen_ids={"c0", "c1"})
+        assert out == []
+
+
+class TestFetchDiscoverClips:
+    """Discover must order by the PERSONALIZED score (the prior random shuffle
+    discarded it). With DISCOVER_WEIGHTS, a taste-matched clip beats a high-hook
+    one."""
+
+    def _dclip(self, cid, slug, hook=0.5, embedding=None):
+        row = {
+            "id": cid, "topic_slug": slug, "title": cid, "video_url": "u",
+            "hook_score": hook, "source_url": f"src-{cid}",
+        }
+        if embedding is not None:
+            row["embedding"] = embedding
+        return row
+
+    def test_orders_by_taste_not_hook(self):
+        # hooky: strong hook, off-taste. on_taste: weak hook, perfect taste match.
+        clips = [
+            self._dclip("hooky", "a", hook=0.95, embedding=[0.0, 1.0]),
+            self._dclip("on_taste", "b", hook=0.05, embedding=[1.0, 0.0]),
+        ]
+        out = _fetch_discover_clips(
+            _db(clips), relevant_slugs=["a", "b"], all_slugs=["a", "b"],
+            seen_ids=set(), limit=10, taste_vector=[1.0, 0.0],
+        )
+        assert [c.id for c in out][0] == "on_taste"
+
+    def test_seen_clips_excluded(self):
+        clips = [self._dclip("c0", "a"), self._dclip("c1", "a")]
+        out = _fetch_discover_clips(
+            _db(clips), relevant_slugs=["a"], all_slugs=["a"],
+            seen_ids={"c0"}, limit=10,
+        )
+        assert {c.id for c in out} == {"c1"}
+
+    def test_respects_limit(self):
+        clips = [self._dclip(f"c{i}", "a") for i in range(20)]
+        out = _fetch_discover_clips(
+            _db(clips), relevant_slugs=["a"], all_slugs=["a"],
+            seen_ids=set(), limit=5,
+        )
+        assert len(out) <= 5
+
+    def test_empty_library_returns_empty(self):
+        out = _fetch_discover_clips(
+            _db([]), relevant_slugs=["a"], all_slugs=["a"],
+            seen_ids=set(), limit=10,
+        )
         assert out == []
