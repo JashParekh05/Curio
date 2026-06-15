@@ -5,7 +5,6 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-TRANSCRIPT_API_KEY = os.environ.get("TRANSCRIPT_API_KEY", "")
 TRANSCRIPT_API_URL = "https://transcriptapi.com/api/v2/youtube/transcript"
 
 
@@ -86,7 +85,8 @@ def _fetch_transcript(video_id: str) -> list[dict] | None:
         logger.info(f"[transcript] cache hit for {video_id} ({len(cached)} segments)")
         return cached
 
-    if not TRANSCRIPT_API_KEY:
+    transcript_api_key = os.environ.get("TRANSCRIPT_API_KEY", "")
+    if not transcript_api_key:
         logger.error("[transcript] TRANSCRIPT_API_KEY not set")
         return None
 
@@ -94,7 +94,7 @@ def _fetch_transcript(video_id: str) -> list[dict] | None:
         resp = httpx.get(
             TRANSCRIPT_API_URL,
             params={"video_url": video_id},
-            headers={"Authorization": f"Bearer {TRANSCRIPT_API_KEY}"},
+            headers={"Authorization": f"Bearer {transcript_api_key}"},
             timeout=30.0,
         )
     except httpx.HTTPError as exc:
