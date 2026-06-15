@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { getDiscoverFeed, recordClipEvent, type Clip } from "@/lib/api";
 import { flushClipEvent, type LastLogged } from "@/lib/clip-telemetry";
+import { shareOrCopy, topicShareUrl } from "@/lib/share";
 import ReelPlayer from "@/components/ReelPlayer";
 
 export default function DiscoverPage() {
@@ -16,6 +17,7 @@ export default function DiscoverPage() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [coldStartTimedOut, setColdStartTimedOut] = useState(false);
   const [readySession, setReadySession] = useState<string | null>(null);
+  const [shareToast, setShareToast] = useState<string | null>(null);
   const pollRef = useRef<NodeJS.Timeout | undefined>(undefined);
   const coldStartTimeoutRef = useRef<NodeJS.Timeout | undefined>(undefined);
 
@@ -74,6 +76,16 @@ export default function DiscoverPage() {
     const clamped = Math.max(0, Math.min(clipsRef.current.length - 1, idx));
     const el = containerRef.current?.querySelectorAll("[data-index]")[clamped] as HTMLElement;
     el?.scrollIntoView({ behavior: "instant" });
+  }, []);
+
+  const handleShare = useCallback(async () => {
+    const clip = clipsRef.current[activeIndexRef.current];
+    if (!clip) return;
+    const result = await shareOrCopy(topicShareUrl(clip.topic_slug, clip.id), "Watch this on Curio");
+    if (result === "copied" || result === "failed") {
+      setShareToast(result === "copied" ? "Link copied" : "Couldn't copy link");
+      setTimeout(() => setShareToast(null), 2000);
+    }
   }, []);
 
   // Telemetry — fires on every activeIndex change regardless of input method
@@ -270,8 +282,14 @@ export default function DiscoverPage() {
           ← Home
         </button>
         <span className="text-white/70 text-xs font-medium tracking-wide">Discover</span>
-        <span className="text-zinc-500 text-xs tabular-nums">
+        <span className="text-zinc-500 text-xs tabular-nums flex items-center gap-2 pointer-events-auto">
           {activeIndex + 1} / {clips.length}
+          <button
+            onClick={handleShare}
+            className="text-white bg-black/40 backdrop-blur-sm rounded-full px-3 py-1.5 text-xs leading-none"
+          >
+            Share
+          </button>
         </span>
       </div>
 
@@ -295,6 +313,14 @@ export default function DiscoverPage() {
 
       {/* Learning path ready toast */}
       {readyToast}
+
+      {shareToast && (
+        <div className="absolute bottom-8 inset-x-0 z-40 flex justify-center pointer-events-none">
+          <div className="bg-white text-black text-sm font-medium rounded-full px-4 py-2 shadow-lg">
+            {shareToast}
+          </div>
+        </div>
+      )}
 
       {/* Progress bar */}
       <div className="absolute top-0 inset-x-0 z-30 h-0.5 bg-zinc-800">

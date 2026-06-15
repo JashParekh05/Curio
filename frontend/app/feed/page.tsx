@@ -5,6 +5,7 @@ import { useSearchParams, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { getPathFeed, getTopicFeed, recordClipEvent, getRecommendations, type Clip, type FeedResponse, type TopicRecommendation } from "@/lib/api";
 import { flushClipEvent, type LastLogged } from "@/lib/clip-telemetry";
+import { shareOrCopy, topicShareUrl } from "@/lib/share";
 import ReelPlayer from "@/components/ReelPlayer";
 import PlanPanel from "@/components/PlanPanel";
 
@@ -19,6 +20,7 @@ function FeedContent() {
 
   const startTopicSlug = params.get("start_topic") ?? null;
   const startSection = params.get("start_section") !== null ? parseInt(params.get("start_section")!) : null;
+  const startClipId = params.get("clip");
   const startIndex = Math.max(0, parseInt(params.get("start") ?? "0") || 0);
 
   const [clips, setClips] = useState<Clip[]>([]);
@@ -30,6 +32,7 @@ function FeedContent() {
   const [loadError, setLoadError] = useState(false);
   const [recommendations, setRecommendations] = useState<TopicRecommendation[]>([]);
   const [showPlan, setShowPlan] = useState(false);
+  const [shareToast, setShareToast] = useState<string | null>(null);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const pollingRef = useRef<NodeJS.Timeout | undefined>(undefined);
@@ -133,7 +136,12 @@ function FeedContent() {
   // Scroll to resolved start index once clips are available
   useEffect(() => {
     if (initialScrollDoneRef.current || clips.length === 0) return;
-    const target = resolvedStartRef.current;
+    let target = resolvedStartRef.current;
+    // A shared "?clip=" deep link lands the visitor on that exact clip.
+    if (startClipId) {
+      const i = clips.findIndex((c) => c.id === startClipId);
+      if (i >= 0) target = i;
+    }
     if (target === 0) { initialScrollDoneRef.current = true; return; }
     if (clips.length > target) {
       initialScrollDoneRef.current = true;
@@ -323,6 +331,22 @@ function FeedContent() {
     setShowPlan(false);
   }, [clips, topicLabels, goTo, sessionId, router]);
 
+  // Share the current topic (deep link lands a new visitor straight on it).
+  const handleShare = useCallback(async () => {
+    if (!activeTopicSlug) return;
+    const result = await shareOrCopy(
+      topicShareUrl(activeTopicSlug, activeClip?.id),
+      `Learn ${activeTopicName} on Curio`,
+    );
+    if (result === "copied") {
+      setShareToast("Link copied");
+      setTimeout(() => setShareToast(null), 2000);
+    } else if (result === "failed") {
+      setShareToast("Couldn't copy link");
+      setTimeout(() => setShareToast(null), 2000);
+    }
+  }, [activeTopicSlug, activeTopicName, activeClip]);
+
   if (initialLoading && clips.length === 0) {
     return (
       <div className="fixed inset-0 bg-black flex items-center justify-center">
@@ -424,6 +448,14 @@ function FeedContent() {
           {processing && clips.length > 0 && (
             <span className="ml-1 text-amber-400">•</span>
           )}
+          {activeTopicSlug && (
+            <button
+              onClick={handleShare}
+              className="text-white bg-black/40 backdrop-blur-sm rounded-full px-3 py-1.5 text-xs leading-none"
+            >
+              Share
+            </button>
+          )}
           {sessionId && orderedTopics.length > 0 && (
             <button
               onClick={() => setShowPlan(true)}
@@ -443,6 +475,14 @@ function FeedContent() {
           activeSlug={activeTopicSlug}
           onJump={jumpToPlan}
         />
+      )}
+
+      {shareToast && (
+        <div className="absolute bottom-8 inset-x-0 z-40 flex justify-center pointer-events-none">
+          <div className="bg-white text-black text-sm font-medium rounded-full px-4 py-2 shadow-lg">
+            {shareToast}
+          </div>
+        </div>
       )}
 
       {/* Nav arrows */}
