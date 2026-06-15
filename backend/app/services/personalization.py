@@ -1,10 +1,56 @@
 """Session/user telemetry reads and interest+taste vector updates."""
 import logging
+import math
 
 from app.services.embeddings import ema_update
 from app.services.feed_scoring import _parse_vector
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_WATCH_RATIO = 0.5  # cold-start baseline for a user with no watch history
+
+
+def compute_interest_delta(
+    *,
+    watch_ms: int,
+    duration_seconds: int | None,
+    completed: bool,
+    replay_count: int,
+    feedback: str | None,
+    baseline_watch_ratio: float | None,
+) -> float:
+    """Interest delta for a single clip event.
+
+    Skips are judged RELATIVE to how the user normally watches: a habitual
+    fast-skimmer bailing at their usual point isn't really a rejection, while a
+    completionist dropping off early is. Completion and explicit feedback stay
+    absolute. Rewatching is a strong positive with diminishing returns.
+    """
+    if feedback == "want_more":
+        return 0.6
+    if feedback == "already_know":
+        return -1.0
+
+    if completed:
+        base = 0.15  # objective completion (80%) stays positive regardless of baseline
+    else:
+        duration_s = max(1.0, float(duration_seconds or 60))
+        watch_ratio = (watch_ms or 0) / 1000.0 / duration_s
+        b = baseline_watch_ratio if (baseline_watch_ratio and baseline_watch_ratio > 0) else DEFAULT_WATCH_RATIO
+        rel = watch_ratio / max(b, 0.2)  # 1.0 == typical for THIS user
+        if rel >= 1.0:
+            base = 0.05   # watched ~as much as they usually do → not a real reject
+        elif rel >= 0.6:
+            base = -0.05
+        elif rel >= 0.3:
+            base = -0.15
+        else:
+            base = -0.30  # bailed unusually fast for them
+
+    # Saturating rewatch bonus: 0 at no replay, diminishing returns, capped ~0.35.
+    rewatch_bonus = 0.35 * (1 - math.exp(-max(0, replay_count)))
+    return round(base + rewatch_bonus, 4)
+
 
 
 def _get_session_telemetry(db, session_id: str) -> tuple[set[str], dict[str, float]]:
@@ -76,23 +122,32 @@ def _update_interest_vector(
         row = existing.data[0] if existing.data else {}
         taste = _parse_vector(row.get("taste_vector"))
 
-    if feedback == "want_more":
-        delta = 0.6
-    elif feedback == "already_know":
-        delta = -1.0
-    elif completed:
-        delta = 0.15 + replay_count * 0.3
-    else:
-        # Tiered penalty based on how much the user watched
-        duration_s = max(1.0, float(duration_seconds or 60))
-        watch_ratio = (watch_ms or 0) / 1000.0 / duration_s
-        if watch_ratio < 0.1:        # bailed almost instantly
-            base = -0.30
-        elif watch_ratio < 0.4:      # casual skip
-            base = -0.10
-        else:                        # watched most of it
-            base = -0.02
-        delta = base + replay_count * 0.3
+    # Judge this event against the user's own watch baseline (read PRE-update so
+    # the event doesn't bias its own judgment). Falls back to a neutral default
+    # for new users with no history.
+    baseline_watch_ratio: float | None = None
+    if user_id:
+        try:
+            prof = (
+                db.table("user_profiles")
+                .select("avg_watch_ratio")
+                .eq("user_id", user_id)
+                .limit(1)
+                .execute()
+            )
+            if prof.data:
+                baseline_watch_ratio = prof.data[0].get("avg_watch_ratio")
+        except Exception as e:
+            logger.warning(f"Failed to read watch baseline for {user_id}: {e}")
+
+    delta = compute_interest_delta(
+        watch_ms=watch_ms,
+        duration_seconds=duration_seconds,
+        completed=completed,
+        replay_count=replay_count,
+        feedback=feedback,
+        baseline_watch_ratio=baseline_watch_ratio,
+    )
 
     # Atomic interest vector update via RPC (prevents concurrent-write clobber).
     # Session-level only — skipped for topic-feed/discover events with no session.
@@ -145,3 +200,17 @@ def _update_interest_vector(
                 }).execute()
             except Exception as e:
                 logger.warning(f"Failed to update taste_vector for {user_id}: {e}")
+
+    # Fold this event into the user's watch-ratio baseline (EMA) so future skips
+    # are judged relative to it. Genuine watch events only — explicit feedback
+    # taps aren't representative dwells. Cap at 1.0 so long dwells don't skew it.
+    if user_id and feedback is None and duration_seconds and watch_ms > 0:
+        watch_ratio = min((watch_ms or 0) / 1000.0 / max(1.0, float(duration_seconds)), 1.0)
+        try:
+            db.rpc("merge_user_watch_ratio", {
+                "p_user_id": user_id,
+                "p_watch_ratio": round(watch_ratio, 4),
+                "p_alpha": 0.1,
+            }).execute()
+        except Exception as e:
+            logger.warning(f"Failed to update watch baseline for {user_id}: {e}")

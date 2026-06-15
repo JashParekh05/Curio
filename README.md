@@ -58,6 +58,7 @@ uvicorn app.main:app --reload --port 8000
 scripts/migration_pgvector.sql
 scripts/migration_sections.sql        # topic_sections table
 scripts/migration_grade_level.sql     # user_profiles.grade_level
+scripts/migration_watch_ratio.sql     # user_profiles.avg_watch_ratio + merge RPC (personal skip thresholds)
 ```
 
 Plus the cache tables + feedback column:
