@@ -84,6 +84,14 @@ npm install
 npm run dev
 ```
 
+**Guest mode (required dashboard step):** the app signs new visitors in as
+anonymous guests so they can watch with no login, then lets them upgrade in
+place to a real account (same `user_id`, so their history carries over). Enable
+this in **Supabase → Authentication → "Allow anonymous sign-ins"**. Without it,
+`signInAnonymously()` returns a 422 and the app falls back to the sign-in screen.
+For the smoothest upgrade, also disable email confirmation (Authentication →
+Email) so `updateUser` makes the new account usable immediately.
+
 ### Seeding content (optional)
 
 Pre-seed topics so common queries serve instantly (the resolver routes similar

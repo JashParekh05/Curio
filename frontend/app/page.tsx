@@ -14,7 +14,7 @@ const SUGGESTIONS = [
 
 export default function Home() {
   const router = useRouter();
-  const { user, session, loading, signOut } = useAuth();
+  const { user, session, loading, signOut, isGuest, isAuthenticated } = useAuth();
   const [query, setQuery] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [path, setPath] = useState<LearningPath | null>(null);
@@ -25,16 +25,16 @@ export default function Home() {
   const [loadingSections, setLoadingSections] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!loading && !user) router.replace("/login");
-  }, [user, loading, router]);
-
-  useEffect(() => {
     if (!user || !session) return;
     getUserHistory(user.id, session.access_token).then(setHistory).catch(() => {});
-    getUserProfile(user.id, session.access_token).then((p) => {
-      if (!p.onboarding_complete) router.replace("/onboarding");
-    }).catch(() => {});
-  }, [user, session]);
+    // Only real accounts are pushed through onboarding; guests browse freely and
+    // are nudged toward signup by the soft gate instead.
+    if (isAuthenticated) {
+      getUserProfile(user.id, session.access_token).then((p) => {
+        if (!p.onboarding_complete) router.replace("/onboarding");
+      }).catch(() => {});
+    }
+  }, [user, session, isAuthenticated]);
 
   async function toggleSections(slug: string) {
     if (expandedTopic === slug) {
@@ -67,7 +67,24 @@ export default function Home() {
     }
   }
 
-  if (loading || !user) return null;
+  if (loading) return null;
+
+  // Anonymous sign-in unavailable (e.g. "Anonymous sign-ins" disabled in
+  // Supabase). Fall back to the login screen rather than a blank page.
+  if (!user) {
+    return (
+      <main className="min-h-screen bg-black text-white flex flex-col items-center justify-center px-4 gap-4">
+        <h1 className="text-4xl font-bold tracking-tight">Curio</h1>
+        <p className="text-zinc-400 text-sm text-center">Sign in to start learning.</p>
+        <button
+          onClick={() => router.push("/login")}
+          className="bg-white text-black font-semibold px-6 py-3 rounded-xl hover:bg-zinc-100 transition"
+        >
+          Sign in
+        </button>
+      </main>
+    );
+  }
 
   return (
     <main className="min-h-screen bg-black text-white flex flex-col items-center justify-center px-4">
@@ -76,14 +93,23 @@ export default function Home() {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-4xl font-bold tracking-tight">Curio</h1>
-            <p className="text-zinc-400 text-sm mt-1">{user.email}</p>
+            <p className="text-zinc-400 text-sm mt-1">{isGuest ? "Guest" : user.email}</p>
           </div>
-          <button
-            onClick={signOut}
-            className="text-zinc-500 hover:text-white text-sm transition"
-          >
-            Sign out
-          </button>
+          {isGuest ? (
+            <button
+              onClick={() => router.push("/login")}
+              className="bg-white text-black text-sm font-semibold px-3 py-2 rounded-xl hover:bg-zinc-100 transition"
+            >
+              Save progress
+            </button>
+          ) : (
+            <button
+              onClick={signOut}
+              className="text-zinc-500 hover:text-white text-sm transition"
+            >
+              Sign out
+            </button>
+          )}
         </div>
 
         {/* Mode tabs */}

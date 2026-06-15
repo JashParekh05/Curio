@@ -165,6 +165,10 @@ export function recordClipEvent(
   replayCount: number | undefined,
   feedback: "want_more" | "already_know" | null | undefined,
   token: string,
+  // keepalive lets the request complete during page unload / route change so
+  // the last clip's event isn't dropped. fetch keepalive keeps the
+  // Authorization header (unlike navigator.sendBeacon), so auth is unchanged.
+  keepalive = false,
 ): void {
   fetch(`${API_BASE}/api/feed/${clipId}/events`, {
     method: "POST",
@@ -176,5 +180,6 @@ export function recordClipEvent(
       replay_count: replayCount ?? 0,
       feedback: feedback ?? null,
     }),
+    keepalive,
   }).catch((err) => console.warn("[recordClipEvent] failed:", err));
 }

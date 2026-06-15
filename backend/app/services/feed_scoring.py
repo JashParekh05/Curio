@@ -67,7 +67,12 @@ def _compute_scores(
     now = datetime.now(timezone.utc)
     for clip in clips:
         hook = clip.hook_score or 0.5
-        pop = pop_stats.get(clip.id, hook)
+        # Unknown population completion rate is NEUTRAL (0.5), not the hook score.
+        # Defaulting to `hook` here double-counted it: a new clip with no
+        # clip_events scored 0.28*hook + 0.23*hook instead of 0.28*hook, so
+        # high-hook clips ranked artificially high. 0.5 matches the neutral
+        # default used for semantic/recency/interest below.
+        pop = pop_stats.get(clip.id, 0.5)
 
         dur_affinity = 1.0
         if user_avg_watch_seconds and clip.duration_seconds:

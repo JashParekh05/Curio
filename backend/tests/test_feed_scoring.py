@@ -31,6 +31,17 @@ class TestComputeScores:
         _compute_scores([clip], {}, None)
         assert clip.final_score == 0.59
 
+    def test_unknown_population_does_not_double_count_hook(self):
+        # A high-hook NEW clip with no population stats. The population term must
+        # fall back to a NEUTRAL 0.5, not to hook_score. With hook=0.9:
+        #   0.28*0.9 + 0.23*0.5 + 0.18*1.0 + 0.13*0.5 + 0.10*0.5 + 0.08*0.5 = 0.702
+        # The old bug (pop defaulting to hook) would have scored 0.794, counting
+        # hook twice. hook=0.5 in test_neutral_baseline masks this because the
+        # neutral default and the hook score coincide there.
+        clip = make_clip(hook_score=0.9)
+        _compute_scores([clip], {}, None)
+        assert clip.final_score == 0.702
+
     def test_liked_topic_scores_higher(self):
         neutral = make_clip(topic_slug="a", hook_score=0.5)
         liked = make_clip(topic_slug="b", hook_score=0.5)

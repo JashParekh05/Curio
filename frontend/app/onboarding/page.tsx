@@ -123,6 +123,14 @@ export default function OnboardingPage() {
         >
           {saving ? "Saving…" : "Start learning"}
         </button>
+
+        <button
+          onClick={() => router.replace("/")}
+          disabled={saving}
+          className="w-full text-zinc-500 hover:text-white text-sm py-1 transition"
+        >
+          Skip for now
+        </button>
       </div>
     </div>
   );
