@@ -118,19 +118,6 @@ export default function Home() {
           )}
         </div>
 
-        {/* Mode tabs */}
-        <div className="flex gap-3">
-          <button
-            onClick={() => router.push("/discover")}
-            className="brutal-btn flex-1 bg-white text-ink py-3 text-sm"
-          >
-            Discover
-          </button>
-          <div className="brutal flex-1 bg-accent-purple text-white font-extrabold py-3 text-sm text-center shadow-brutal">
-            Learn
-          </div>
-        </div>
-
         {!path ? (
           <>
             {submitting ? (
@@ -152,7 +139,7 @@ export default function Home() {
             ) : (
               <>
                 <div className="space-y-3">
-                  <p className="text-2xl font-black leading-tight">What do you want to learn today?</p>
+                  <p className="text-3xl font-black leading-tight">What do you want to learn today?</p>
                   <div className="flex gap-3">
                     <input
                       className="brutal flex-1 bg-white px-4 py-3 text-ink placeholder-ink/40 focus:outline-none focus:shadow-brutal font-medium"
@@ -188,6 +175,21 @@ export default function Home() {
                     ))}
                   </div>
                 </div>
+
+                {/* Secondary entry: just-browse the Discover feed. Kept visually
+                    quiet so it never competes with the primary search action. */}
+                <div className="flex items-center gap-3 pt-1">
+                  <div className="flex-1 h-[3px] bg-ink/15" />
+                  <span className="text-ink/40 text-xs font-bold uppercase tracking-wide">or</span>
+                  <div className="flex-1 h-[3px] bg-ink/15" />
+                </div>
+                <button
+                  onClick={() => router.push("/discover")}
+                  className="brutal-btn w-full bg-white text-ink py-3 text-sm flex items-center justify-center gap-2"
+                >
+                  Surprise me
+                  <span className="font-black">{">"}</span>
+                </button>
               </>
             )}
 
