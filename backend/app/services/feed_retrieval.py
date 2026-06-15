@@ -81,8 +81,28 @@ def _fetch_clips_for_slug(
     clip_ids = [c.id for c in clips]
     pop_stats = _get_clip_population_stats(db, clip_ids)
     clips = _compute_scores(clips, pop_stats, user_avg_watch_seconds, interest_vector, taste_vector)
-    sorted_clips = sorted(clips, key=lambda c: c.final_score or c.hook_score, reverse=True)
-    return _spread_by_source(sorted_clips)
+    return _order_by_arc(clips)
+
+
+def _order_by_arc(clips: list[Clip]) -> list[Clip]:
+    """Deliver clips as a story: keep the section arc (hook → what → how →
+    outcomes) intact, and let engagement + personalization scores decide the
+    order WITHIN each beat. Spread-by-source is applied per-beat so we never
+    interleave clips across sections (which would scramble the narrative).
+
+    Clips with no section_index (pre-section fallback) form a single group, so
+    this degrades to the old score-ordered behavior when no arc exists.
+    """
+    from itertools import groupby
+
+    def _beat(c: Clip) -> int:
+        return c.section_index if c.section_index is not None else 1_000_000
+
+    ordered: list[Clip] = []
+    for _, group in groupby(sorted(clips, key=_beat), key=_beat):
+        beat = sorted(group, key=lambda c: c.final_score or c.hook_score, reverse=True)
+        ordered.extend(_spread_by_source(beat))
+    return ordered
 
 
 def _fetch_discover_clips(

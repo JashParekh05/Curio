@@ -133,9 +133,14 @@ async def get_path_feed(session_id: str, background_tasks: BackgroundTasks, call
         )
         completion_rate = topic_completion.get(slug, 0.0)
 
-        # Struggling on this topic: sort by shortest clips first
+        # Struggling on this topic: prefer shorter clips, but WITHIN each beat —
+        # keep the narrative arc intact rather than flattening to global duration.
         if completion_rate < 0.3 and slug in topic_completion:
-            clips = sorted(clips, key=lambda c: c.duration_seconds or 999)
+            clips = sorted(
+                clips,
+                key=lambda c: (c.section_index if c.section_index is not None else 1_000_000,
+                               c.duration_seconds or 999),
+            )
 
         clips = _transcript_boost(clips, user_query)
 

@@ -5,6 +5,7 @@ from app.services.feed_scoring import (
     _interleave_topics,
     _spread_by_source,
 )
+from app.services.feed_retrieval import _order_by_arc
 from app.models.schemas import FeedResponse
 from tests.conftest import make_clip
 
@@ -101,3 +102,43 @@ class TestInterleaveTopics:
         before = {c.id for f in [a, b] for c in f.clips}
         after = {c.id for f in out for c in f.clips}
         assert before == after
+
+
+class TestOrderByArc:
+    def test_sections_stay_in_order(self):
+        # Section 3 clip has the highest score, but the arc must still lead with
+        # section 0. Engagement only ranks WITHIN a beat, never across beats.
+        clips = [
+            make_clip(section_index=3, hook_score=0.99, source_url="d"),
+            make_clip(section_index=0, hook_score=0.10, source_url="a"),
+            make_clip(section_index=1, hook_score=0.50, source_url="b"),
+            make_clip(section_index=2, hook_score=0.70, source_url="c"),
+        ]
+        for c in clips:
+            c.final_score = c.hook_score
+        out = _order_by_arc(clips)
+        assert [c.section_index for c in out] == [0, 1, 2, 3]
+
+    def test_ranks_within_beat_by_score(self):
+        # Two clips in the same beat (different sources so spread keeps them
+        # both) — higher score comes first.
+        hi = make_clip(section_index=1, hook_score=0.9, source_url="x")
+        lo = make_clip(section_index=1, hook_score=0.2, source_url="y")
+        hi.final_score, lo.final_score = 0.9, 0.2
+        out = _order_by_arc([lo, hi])
+        assert [c.id for c in out] == [hi.id, lo.id]
+
+    def test_no_sections_degrades_to_score_order(self):
+        a = make_clip(hook_score=0.3, source_url="a")
+        b = make_clip(hook_score=0.8, source_url="b")
+        a.final_score, b.final_score = 0.3, 0.8
+        out = _order_by_arc([a, b])
+        assert [c.id for c in out] == [b.id, a.id]
+
+    def test_no_clips_lost(self):
+        clips = [make_clip(section_index=i % 4, source_url=str(i)) for i in range(12)]
+        for c in clips:
+            c.final_score = 0.5
+        out = _order_by_arc(clips)
+        assert {c.id for c in out} == {c.id for c in clips}
+        assert len(out) == len(clips)
