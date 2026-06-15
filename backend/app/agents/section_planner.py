@@ -312,3 +312,80 @@ def plan_and_store_sections(
 
     logger.info(f"[section_planner] {len(stored)} sections stored for {topic_slug}")
     return stored
+
+
+# --- topic expansion (endless "more about this subject") -------------------
+
+def _default_extension(topic_name: str, count: int) -> list[dict]:
+    """Fallback fresh angles when the LLM is unavailable."""
+    pool = [
+        {"title": f"A Surprising Truth About {topic_name}",
+         "description": "A counterintuitive fact that reframes the topic.",
+         "search_query": f"surprising facts about {topic_name}"},
+        {"title": f"{topic_name} in the Real World",
+         "description": "An unexpected real-world application.",
+         "search_query": f"{topic_name} real world applications examples"},
+        {"title": f"The Hardest Part of {topic_name}",
+         "description": "A common misconception or tricky edge case.",
+         "search_query": f"{topic_name} common misconceptions mistakes"},
+        {"title": f"Where {topic_name} Goes Next",
+         "description": "Cutting-edge or advanced directions.",
+         "search_query": f"advanced {topic_name} deep dive"},
+    ]
+    return pool[:count]
+
+
+def _extension_angles(topic_name: str, existing_titles: list[str], count: int) -> list[dict]:
+    """LLM: propose `count` fresh angles that don't repeat existing_titles."""
+    covered = "; ".join(existing_titles) or "(none)"
+    prompt = f"""A learner has already watched a lesson on "{topic_name}" and is STILL watching — keep them hooked with fresh material on the SAME subject.
+
+Generate {count} new angles that go DEEPER or SIDEWAYS: surprising facts, counterintuitive results, real-world applications, edge cases, or where the field is heading. Each must be genuinely NEW — do NOT repeat or paraphrase any already-covered angle.
+
+Already covered (avoid these): {covered}
+
+For each angle return:
+- title: curiosity-gap phrase, max 8 words
+- description: 1-2 sentences on what it reveals
+- search_query: a specific YouTube search for ONE focused 5-10 min video on THIS angle (not the broad topic)
+
+Return ONLY a JSON array:
+[{{"title": "...", "description": "...", "search_query": "..."}}]"""
+    resp = _client().chat.completions.create(
+        model=MODEL, max_tokens=600, temperature=0.7,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return json.loads(_strip_json(resp.choices[0].message.content))
+
+
+def plan_extension_sections(topic_name: str, existing_titles: list[str],
+                            start_index: int, count: int = 2) -> list[dict]:
+    """Plan `count` fresh 'depth' sections continuing from start_index, skipping
+    anything that duplicates existing_titles. Best-effort: falls back to static
+    angles on any LLM/parse failure. Returns section dicts (not stored)."""
+    try:
+        angles = _extension_angles(topic_name, existing_titles, count + 2)  # over-fetch for dedupe
+    except Exception as exc:
+        logger.warning(f"[section_planner] extension angles failed for '{topic_name}': {exc}")
+        angles = _default_extension(topic_name, count + 2)
+
+    seen = {t.strip().lower() for t in existing_titles}
+    out: list[dict] = []
+    defaults = _default_extension(topic_name, 4)
+    for a in list(angles) + defaults:  # defaults backfill if LLM gave too few/dupes
+        if len(out) >= count:
+            break
+        if not isinstance(a, dict):
+            continue
+        title = str(a.get("title") or "").strip()
+        if not title or title.lower() in seen:
+            continue
+        seen.add(title.lower())
+        idx = start_index + len(out)
+        out.append({
+            "section_index": idx,
+            "title": title[:120],
+            "description": str(a.get("description") or "").strip(),
+            "search_query": str(a.get("search_query") or f"{topic_name} {title}").strip(),
+        })
+    return out

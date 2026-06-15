@@ -116,7 +116,10 @@ def _build_segment_prompt(segments_with_times: list[dict], topic_slug: str,
 
     if section_context:
         idx = section_context.get("section_index")
-        role = _ARC_ROLES.get(idx, "one beat of the lesson")
+        role = _ARC_ROLES.get(
+            idx,
+            "a DEEPER DIVE — a fresh, surprising angle beyond the basics that rewards the viewer who's still here",
+        )
         title = section_context.get("title", "")
         desc = section_context.get("description", "")
         arc = section_context.get("arc_titles") or []
@@ -133,13 +136,13 @@ def _build_segment_prompt(segments_with_times: list[dict], topic_slug: str,
             "The FIRST clip must BRIDGE from the previous beat — open by paying off the "
             "curiosity the prior beat created, then carry the story forward."
         )
-        # The final beat is where retention is won or lost — make it resolve.
-        is_last = idx == 3 or (arc and idx == len(arc) - 1)
+        # Only the core arc's outcomes beat (3) closes the loop. Depth beats
+        # (4+) are open-ended "keep watching" material — no terminal payoff.
         payoff = (
             "\n- This is the CLOSING beat: the LAST clip must land the payoff — resolve the "
             "central question the lesson opened with and leave the viewer with a clear, "
             "satisfying \"so what\" (why this matters / what it unlocks), not a flat summary."
-            if is_last else ""
+            if idx == 3 else ""
         )
         return f"""You are cutting an educational video about "{topic_slug}" into a CONNECTED sequence of short reels (TikTok-style) for ONE specific beat of a 4-part micro-lesson.
 {arc_block}

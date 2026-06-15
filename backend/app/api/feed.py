@@ -22,6 +22,13 @@ from app.services.discover_seeding import (
     _GRADE_DIFFICULTY,
 )
 from app.services.path_extension import _should_extend, _extend_path, _LOW_CLIPS_THRESHOLD
+from app.services.topic_expansion import (
+    _is_expansion_candidate,
+    _should_expand_topic,
+    _expand_topic,
+    EXPAND_WHEN_UNSEEN_AT_OR_BELOW,
+    ENGAGED_COMPLETION,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/feed", tags=["feed"])
@@ -119,6 +126,7 @@ async def get_path_feed(session_id: str, background_tasks: BackgroundTasks, call
 
     feeds = []
     missing_slugs: list[str] = []  # topics with no clips that aren't already generating
+    expand_slugs: list[str] = []   # engaged topics running low on unseen clips
     for slug in path.data[0]["topic_slugs"]:
         # Skip topics the user has marked as already known
         if interest_vector.get(slug, 0.0) <= -0.8:
@@ -152,6 +160,14 @@ async def get_path_feed(session_id: str, background_tasks: BackgroundTasks, call
         if not clips and not is_generating:
             missing_slugs.append(slug)
 
+        # Endless expansion: an engaged viewer running low on unseen clips for
+        # this topic gets fresh angles on the same subject generated ahead of
+        # the drop-off, so the subject feels bottomless. The throttle check is
+        # last so it only marks a cooldown when the topic is actually eligible.
+        if (_is_expansion_candidate(len(clips), completion_rate, is_generating)
+                and _should_expand_topic(session_id, slug)):
+            expand_slugs.append(slug)
+
         feeds.append(FeedResponse(
             topic_slug=slug,
             clips=clips,
@@ -175,6 +191,19 @@ async def get_path_feed(session_id: str, background_tasks: BackgroundTasks, call
             name = slug_names.get(slug) or slug.replace("-", " ").title()
             background_tasks.add_task(_process_single_topic, slug, name)
             logger.info(f"[feed] self-heal: triggered generation for empty topic='{slug}'")
+
+    # Endless expansion: queue fresh angles for engaged topics low on clips.
+    if expand_slugs:
+        names: dict[str, str] = {}
+        try:
+            rows = db.table("topics").select("slug,name").in_("slug", expand_slugs).execute()
+            names = {r["slug"]: r["name"] for r in rows.data}
+        except Exception as e:
+            logger.warning(f"[feed] expansion name lookup failed: {e}")
+        for slug in expand_slugs:
+            name = names.get(slug) or slug.replace("-", " ").title()
+            background_tasks.add_task(_expand_topic, slug, name)
+            logger.info(f"[feed] queued topic expansion for engaged topic='{slug}'")
 
     # Bubble "want more" topics (high interest) to the front
     feeds.sort(key=lambda f: interest_vector.get(f.topic_slug, 0.0), reverse=True)

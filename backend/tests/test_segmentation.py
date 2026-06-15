@@ -59,16 +59,27 @@ class TestNarrativePrompt:
         for t in ["Hook T", "Define T", "Mechanics T", "Outcomes T"]:
             assert t in p
 
-    def test_unknown_index_falls_back_gracefully(self):
-        p = _build_segment_prompt(_segs(), "T", _ctx(9, arc=[]))
-        assert "one beat of the lesson" in p
-        # no arc block when arc_titles empty
-        assert "<-- THIS BEAT" not in p
+    def test_depth_beat_index_uses_deeper_dive_role(self):
+        # Extension beats (index >= 4) get the open-ended "deeper dive" role and
+        # NO closing payoff (the stream stays open).
+        p = _build_segment_prompt(_segs(), "T", _ctx(5, arc=[]))
+        assert "DEEPER DIVE" in p
+        assert "CLOSING beat" not in p
+        assert "<-- THIS BEAT" not in p  # no arc block when arc empty
+
+    def test_only_outcomes_beat_gets_closing_payoff(self):
+        assert "CLOSING beat" in _build_segment_prompt(_segs(), "T", _ctx(3))
+        for i in (0, 1, 2):
+            assert "CLOSING beat" not in _build_segment_prompt(_segs(), "T", _ctx(i))
 
     def test_serves_this_beat_guardrail_present(self):
         p = _build_segment_prompt(_segs(), "T", _ctx(1))
         assert "do NOT drift into other beats" in p
         assert "OPEN LOOP" in p
+
+    def test_every_clip_micro_payoff_present(self):
+        p = _build_segment_prompt(_segs(), "T", _ctx(1))
+        assert "micro-payoff" in p
 
 
 class TestTranscriptTruncation:
