@@ -2,7 +2,8 @@
 skipped clip can never produce a positive interest signal."""
 from hypothesis import given, strategies as st
 
-from app.services.personalization import _event_delta
+from app.services.personalization import _event_delta, _get_session_telemetry, _update_interest_vector
+from tests.conftest import FakeDB
 
 
 class TestFeedbackPrecedence:
@@ -67,3 +68,86 @@ class TestSkipNeverPositive:
     @given(replay=st.integers(min_value=0, max_value=100))
     def test_completed_delta_is_always_positive(self, replay):
         assert _event_delta(completed=True, replay_count=replay) >= 0.15
+
+
+class TestGetSessionTelemetry:
+    def _db(self, fail=None):
+        return FakeDB(
+            store={
+                "clip_events": [
+                    {"clip_id": "a", "watch_ms": 60000, "completed": True, "session_id": "s"},
+                    {"clip_id": "b", "watch_ms": 5000, "completed": False, "session_id": "s"},
+                    {"clip_id": "c", "watch_ms": 60000, "completed": True, "session_id": "s"},
+                    {"clip_id": "x", "watch_ms": 1, "completed": False, "session_id": "other"},
+                ],
+                "clips": [
+                    {"id": "a", "topic_slug": "t1"},
+                    {"id": "b", "topic_slug": "t1"},
+                    {"id": "c", "topic_slug": "t2"},
+                ],
+            },
+            fail=fail,
+        )
+
+    def test_seen_ids_and_completion_rates(self):
+        seen, completion = _get_session_telemetry(self._db(), "s")
+        assert seen == {"a", "b", "c"}              # only this session's clips
+        assert completion["t1"] == 0.5              # a=True, b=False
+        assert completion["t2"] == 1.0              # c=True
+
+    def test_event_fetch_failure_returns_empty(self):
+        seen, completion = _get_session_telemetry(self._db(fail={"clip_events"}), "s")
+        assert seen == set() and completion == {}
+
+    def test_no_events_returns_empty(self):
+        seen, completion = _get_session_telemetry(FakeDB(store={"clip_events": []}), "s")
+        assert seen == set() and completion == {}
+
+
+class TestUpdateInterestVector:
+    def _session_emb(self, taste=None):
+        return [{"session_id": "s", "taste_vector": taste}] if taste is not None else []
+
+    def test_positive_event_writes_all_signals(self):
+        db = FakeDB(store={"session_embeddings": []})
+        _update_interest_vector(
+            db, "s", "topic-x", completed=True, replay_count=0,
+            clip_embedding=[1.0, 0.0], user_id="u",
+        )
+        # session interest merged with the completed delta (0.15)
+        sess = db.rpc_named("merge_session_interest")
+        assert sess and sess[0]["p_delta"] == 0.15
+        # user interest merged at half weight
+        assert db.rpc_named("merge_user_interest")[0]["p_delta"] == 0.075
+        # taste moved: session upsert + user taste rpc, seeded to the clip embedding
+        assert any(t == "session_embeddings" for t, _ in db.rec["upserts"])
+        assert db.rpc_named("merge_user_taste")[0]["p_new_taste"] == [1.0, 0.0]
+
+    def test_negative_event_does_not_touch_taste(self):
+        db = FakeDB(store={"session_embeddings": []})
+        _update_interest_vector(
+            db, "s", "topic-x", completed=False, replay_count=0,
+            watch_ms=1000, duration_seconds=60, clip_embedding=[1.0, 0.0], user_id="u",
+        )
+        assert db.rpc_named("merge_session_interest")[0]["p_delta"] == -0.30
+        # taste never updated on a negative delta
+        assert db.rec["upserts"] == []
+        assert db.rpc_named("merge_user_taste") == []
+
+    def test_sessionless_event_skips_session_writes_but_updates_user(self):
+        db = FakeDB(store={"session_embeddings": []})
+        _update_interest_vector(
+            db, None, "topic-x", completed=True, replay_count=0,
+            clip_embedding=[1.0, 0.0], user_id="u",
+        )
+        assert db.rpc_named("merge_session_interest") == []      # no session
+        assert db.rec["upserts"] == []                            # no session taste upsert
+        assert db.rpc_named("merge_user_interest")               # user still updated
+        assert db.rpc_named("merge_user_taste")
+
+    def test_want_more_feedback_uses_strong_positive_delta(self):
+        db = FakeDB(store={"session_embeddings": []})
+        _update_interest_vector(
+            db, "s", "topic-x", completed=False, replay_count=0, feedback="want_more",
+        )
+        assert db.rpc_named("merge_session_interest")[0]["p_delta"] == 0.6

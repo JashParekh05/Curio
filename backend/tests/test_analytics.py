@@ -1,4 +1,5 @@
-from app.services.analytics import compute_dropoff, _watch_ratio
+from app.services.analytics import compute_dropoff, _watch_ratio, topic_dropoff
+from tests.conftest import FakeDB
 
 
 def _meta(**by_id):
@@ -77,3 +78,49 @@ class TestComputeDropoff:
         out = compute_dropoff(meta, events)
         assert out[0]["avg_watch_ratio"] is None
         assert out[0]["views"] == 1
+
+
+class TestTopicDropoffWrapper:
+    def _db(self, fail=None):
+        return FakeDB(
+            store={
+                "clips": [
+                    {"id": "a", "topic_slug": "t", "section_index": 0, "duration_seconds": 60},
+                    {"id": "b", "topic_slug": "t", "section_index": 1, "duration_seconds": 60},
+                    {"id": "z", "topic_slug": "other", "section_index": 0, "duration_seconds": 60},
+                ],
+                "clip_events": [
+                    {"clip_id": "a", "watch_ms": 60000, "completed": True},
+                    {"clip_id": "a", "watch_ms": 60000, "completed": True},
+                    {"clip_id": "b", "watch_ms": 30000, "completed": False},
+                ],
+            },
+            fail=fail,
+        )
+
+    def test_builds_funnel_for_topic_only(self):
+        funnel = topic_dropoff_with(self._db(), "t")
+        assert [r["section_index"] for r in funnel] == [0, 1]
+        assert funnel[0]["views"] == 2 and funnel[1]["views"] == 1
+        assert funnel[1]["retention_vs_first"] == 0.5
+
+    def test_no_clips_returns_empty(self):
+        assert topic_dropoff_with(FakeDB(store={"clips": []}), "t") == []
+
+    def test_clips_fetch_failure_returns_empty(self):
+        assert topic_dropoff_with(self._db(fail={"clips"}), "t") == []
+
+    def test_events_fetch_failure_returns_empty(self):
+        assert topic_dropoff_with(self._db(fail={"clip_events"}), "t") == []
+
+
+def topic_dropoff_with(db, slug):
+    """topic_dropoff resolves its own client via get_client; patch it for the
+    duration of the call so the fake DB is used."""
+    import app.db.supabase as supa
+    orig = supa.get_client
+    supa.get_client = lambda: db
+    try:
+        return topic_dropoff(slug)
+    finally:
+        supa.get_client = orig
