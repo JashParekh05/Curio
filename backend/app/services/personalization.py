@@ -43,6 +43,40 @@ def _get_session_telemetry(db, session_id: str) -> tuple[set[str], dict[str, flo
     return seen_ids, topic_completion
 
 
+def _event_delta(
+    completed: bool,
+    replay_count: int,
+    feedback: str | None = None,
+    watch_ms: int = 0,
+    duration_seconds: int | None = None,
+) -> float:
+    """Interest delta for a single clip event. Pure so it's unit-testable.
+
+    Precedence: explicit feedback > completion > skip penalty.
+
+    Skip velocity matters: bailing in <10% of a clip is a much stronger 'no'
+    than watching most of it. Replays on a SKIP can mitigate the penalty (the
+    viewer came back) but never flip it positive — abandoning a clip is not a
+    'want more this topic' signal, so the skip branch is capped at 0.
+    """
+    if feedback == "want_more":
+        return 0.6
+    if feedback == "already_know":
+        return -1.0
+    if completed:
+        return round(0.15 + replay_count * 0.3, 4)
+
+    duration_s = max(1.0, float(duration_seconds or 60))
+    watch_ratio = (watch_ms or 0) / 1000.0 / duration_s
+    if watch_ratio < 0.1:        # bailed almost instantly
+        base = -0.30
+    elif watch_ratio < 0.4:      # casual skip
+        base = -0.10
+    else:                        # watched most of it
+        base = -0.02
+    return round(min(0.0, base + replay_count * 0.3), 4)
+
+
 def _update_interest_vector(
     db,
     session_id: str,
@@ -76,23 +110,7 @@ def _update_interest_vector(
         row = existing.data[0] if existing.data else {}
         taste = _parse_vector(row.get("taste_vector"))
 
-    if feedback == "want_more":
-        delta = 0.6
-    elif feedback == "already_know":
-        delta = -1.0
-    elif completed:
-        delta = 0.15 + replay_count * 0.3
-    else:
-        # Tiered penalty based on how much the user watched
-        duration_s = max(1.0, float(duration_seconds or 60))
-        watch_ratio = (watch_ms or 0) / 1000.0 / duration_s
-        if watch_ratio < 0.1:        # bailed almost instantly
-            base = -0.30
-        elif watch_ratio < 0.4:      # casual skip
-            base = -0.10
-        else:                        # watched most of it
-            base = -0.02
-        delta = base + replay_count * 0.3
+    delta = _event_delta(completed, replay_count, feedback, watch_ms, duration_seconds)
 
     # Atomic interest vector update via RPC (prevents concurrent-write clobber).
     # Session-level only — skipped for topic-feed/discover events with no session.
