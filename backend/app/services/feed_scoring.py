@@ -13,6 +13,19 @@ from app.services.embeddings import cosine_similarity
 
 logger = logging.getLogger(__name__)
 
+# Scoring weight profiles per surface. Learn is structure-first: personalization
+# (interest + semantic) is a modest ~18%, since the arc/story pass already own
+# ordering. Discover is personalization-first: taste + interest dominate so the
+# feed adapts to how each person learns. Weights sum to 1.0 within a profile.
+LEARN_WEIGHTS = {
+    "hook": 0.28, "population": 0.23, "duration": 0.18,
+    "recency": 0.13, "interest": 0.10, "semantic": 0.08,
+}
+DISCOVER_WEIGHTS = {
+    "hook": 0.15, "population": 0.10, "duration": 0.0,
+    "recency": 0.05, "interest": 0.30, "semantic": 0.40,
+}
+
 
 def _parse_vector(v) -> list[float] | None:
     """Supabase returns pgvector columns as strings; parse them to list[float]."""
@@ -55,15 +68,20 @@ def _compute_scores(
     user_avg_watch_seconds: float | None,
     interest_vector: dict[str, float] | None = None,
     taste_vector: list[float] | None = None,
+    weights: dict[str, float] | None = None,
 ) -> list[Clip]:
     """
-    final_score = 0.28 * hook_score
-                + 0.23 * population_completion_rate
-                + 0.18 * duration_affinity
-                + 0.13 * recency_bonus
-                + 0.10 * interest_affinity
-                + 0.08 * semantic_affinity   (0 when no taste_vector or no clip embedding)
+    final_score = w.hook       * hook_score
+                + w.population  * population_completion_rate
+                + w.duration    * duration_affinity
+                + w.recency     * recency_bonus
+                + w.interest    * interest_affinity
+                + w.semantic    * semantic_affinity   (0 when no taste_vector or no clip embedding)
+
+    `weights` selects the surface profile (defaults to LEARN_WEIGHTS). Pass
+    DISCOVER_WEIGHTS for the personalization-first discover feed.
     """
+    w = weights or LEARN_WEIGHTS
     now = datetime.now(timezone.utc)
     for clip in clips:
         hook = clip.hook_score or 0.5
@@ -101,7 +119,8 @@ def _compute_scores(
                 pass
 
         clip.final_score = round(
-            0.28 * hook + 0.23 * pop + 0.18 * dur_affinity + 0.13 * recency + 0.10 * affinity + 0.08 * semantic,
+            w["hook"] * hook + w["population"] * pop + w["duration"] * dur_affinity
+            + w["recency"] * recency + w["interest"] * affinity + w["semantic"] * semantic,
             4,
         )
     return clips

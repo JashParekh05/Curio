@@ -3,7 +3,7 @@ import random
 import logging
 
 from app.models.schemas import Clip
-from app.services.feed_scoring import _get_clip_population_stats, _compute_scores, _spread_by_source
+from app.services.feed_scoring import _get_clip_population_stats, _compute_scores, _spread_by_source, DISCOVER_WEIGHTS
 
 logger = logging.getLogger(__name__)
 
@@ -153,6 +153,10 @@ def _fetch_discover_clips(
 
     clip_ids = [c.id for c in clips]
     pop_stats = _get_clip_population_stats(db, clip_ids)
-    clips = _compute_scores(clips, pop_stats, None, interest_vector=interest_vector, taste_vector=taste_vector)
-    random.shuffle(clips)
+    clips = _compute_scores(clips, pop_stats, None, interest_vector=interest_vector,
+                            taste_vector=taste_vector, weights=DISCOVER_WEIGHTS)
+    # Order by the personalized score (a prior random shuffle here discarded it,
+    # so discover was only personalized at topic-selection, not ordering).
+    # Source-spread the top `limit` to avoid clumping clips from one video.
+    clips = sorted(clips, key=lambda c: c.final_score or 0.0, reverse=True)
     return _spread_by_source(clips[:limit])

@@ -4,6 +4,8 @@ from app.services.feed_scoring import (
     _transcript_boost,
     _interleave_topics,
     _spread_by_source,
+    LEARN_WEIGHTS,
+    DISCOVER_WEIGHTS,
 )
 from app.services.feed_retrieval import _order_by_arc
 from app.models.schemas import FeedResponse
@@ -102,6 +104,38 @@ class TestInterleaveTopics:
         before = {c.id for f in [a, b] for c in f.clips}
         after = {c.id for f in out for c in f.clips}
         assert before == after
+
+
+class TestSurfaceWeights:
+    """Discover is personalization-first; Learn is structure/hook-first. The
+    same two clips should rank in OPPOSITE order under the two profiles."""
+
+    def _pair(self):
+        # hooky: strong hook, no taste match. on_taste: weak hook, perfect taste match.
+        hooky = make_clip(hook_score=0.9)
+        on_taste = make_clip(hook_score=0.2, embedding=[1.0, 0.0])
+        return hooky, on_taste
+
+    def test_discover_lets_taste_beat_hook(self):
+        hooky, on_taste = self._pair()
+        _compute_scores([hooky, on_taste], {}, None, taste_vector=[1.0, 0.0], weights=DISCOVER_WEIGHTS)
+        assert on_taste.final_score > hooky.final_score
+
+    def test_learn_lets_hook_beat_taste(self):
+        hooky, on_taste = self._pair()
+        _compute_scores([hooky, on_taste], {}, None, taste_vector=[1.0, 0.0], weights=LEARN_WEIGHTS)
+        assert hooky.final_score > on_taste.final_score
+
+    def test_default_profile_is_learn(self):
+        a, b = self._pair()
+        _compute_scores([a, b], {}, None, taste_vector=[1.0, 0.0])  # no weights arg
+        a2, b2 = self._pair()
+        _compute_scores([a2, b2], {}, None, taste_vector=[1.0, 0.0], weights=LEARN_WEIGHTS)
+        assert a.final_score == a2.final_score and b.final_score == b2.final_score
+
+    def test_weight_profiles_sum_to_one(self):
+        assert abs(sum(LEARN_WEIGHTS.values()) - 1.0) < 1e-9
+        assert abs(sum(DISCOVER_WEIGHTS.values()) - 1.0) < 1e-9
 
 
 class TestOrderByArc:
