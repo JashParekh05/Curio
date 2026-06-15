@@ -82,3 +82,44 @@ technique) and use the otherwise-dead plan-generation latency productively.
   reinforce. Layer mastery-based personalization in later.
 - **v1 scope**: notes outline during generation + one MCQ checkpoint per topic,
   results stored. Mastery-driven personalization is a follow-up.
+
+### Discover interest topics (a mutable "show me more about..." list)
+Separate from the main Learn flow ("teach me X end to end"), let users keep a
+mutable list of standing interests that naturally populate Discover — e.g. "the
+Gita", "this LeetCode concept", "modern history". The list is editable any time
+and prompted at login.
+
+- Distinct from a one-off learn query: these are persistent "keep feeding me
+  this" signals, not a single path request.
+- Editable list (add/remove) surfaced in Discover; a login-time prompt nudges
+  the user to add/refresh it.
+- Each entry seeds Discover (search + pipeline) and biases the discover taste/
+  interest ranking toward those subjects.
+- Strong, explicit personalization signal — feeds the same taste/interest
+  machinery and, later, the recommendation model below.
+
+### Deep dive: train a core recommendation model?
+Decide whether to keep the current heuristic stack (hook/pop/recency + taste/
+interest vectors + cosine) or train a dedicated recommender. Evaluate: do we
+have enough interaction volume (clip_events, quiz results, interest lists) to
+train; candidate approaches (two-tower retrieval, sequence model, learned
+ranker over current features); offline eval plan; cost/latency; and whether a
+learned model beats the heuristics enough to justify the complexity. Output is a
+recommendation (train vs. not, and if so which approach), not code.
+
+### Capture-to-learn (text/image -> new topic)
+Let a user grab something they found anywhere — selected text or an image (a
+photo, screenshot, or an image on a page) — and turn it into a learning topic /
+Discover entry with one tap. "I saw this thing, teach me about it."
+
+- Input: pasted/selected text, or an image. For images, extract meaning first —
+  OCR for text-in-image and a CV/vision step (an off-the-shelf vision model or
+  library, e.g. a hosted multimodal LLM vision endpoint, or OCR like Tesseract
+  for the text-only case) to caption/identify the subject.
+- That extracted subject becomes a topic query: run it through the existing
+  curriculum/pipeline (Learn) or add it to the Discover interest list.
+- Evaluate build vs. buy: prefer a library/hosted vision API over training our
+  own CV model unless there's a clear reason; the deliverable for v1 is "image/
+  text in -> topic queued", not a custom-trained model.
+- Another rich input signal: what people capture from the wild is a strong
+  interest signal to feed back into personalization.
