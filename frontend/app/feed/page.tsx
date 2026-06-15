@@ -473,6 +473,7 @@ function FeedContent() {
           onClose={() => setShowPlan(false)}
           topics={orderedTopics}
           activeSlug={activeTopicSlug}
+          sessionId={sessionId}
           onJump={jumpToPlan}
         />
       )}

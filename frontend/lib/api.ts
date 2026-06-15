@@ -183,3 +183,58 @@ export function recordClipEvent(
     keepalive,
   }).catch((err) => console.warn("[recordClipEvent] failed:", err));
 }
+
+// --- quiz ------------------------------------------------------------------
+
+export interface QuizQuestion {
+  id: string;
+  question: string;
+  options: string[];
+  correct_index: number;
+  explanation: string;
+}
+
+export interface TopicMastery {
+  answered: number;
+  correct: number;
+  correct_rate: number;
+  points: number;
+  mastered: boolean;
+}
+
+export interface QuizMastery {
+  topics: Record<string, TopicMastery>;
+  total_points: number;
+}
+
+export async function getQuiz(topicSlug: string, token: string): Promise<QuizQuestion[]> {
+  const res = await fetch(`${API_BASE}/api/quiz/${encodeURIComponent(topicSlug)}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export async function getQuizMastery(userId: string, token: string): Promise<QuizMastery> {
+  const res = await fetch(`${API_BASE}/api/quiz/mastery/${encodeURIComponent(userId)}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) return { topics: {}, total_points: 0 };
+  return res.json();
+}
+
+export function recordQuizAnswer(
+  questionId: string,
+  chosenIndex: number,
+  sessionId: string | null | undefined,
+  streak: number,
+  token: string,
+): void {
+  // Fire-and-forget — the client already graded and revealed; the server
+  // recomputes correctness and records the result off the critical path.
+  fetch(`${API_BASE}/api/quiz/${encodeURIComponent(questionId)}/answer`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ chosen_index: chosenIndex, session_id: sessionId ?? null, streak }),
+  }).catch((err) => console.warn("[recordQuizAnswer] failed:", err));
+}

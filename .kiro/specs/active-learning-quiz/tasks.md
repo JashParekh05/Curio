@@ -72,11 +72,11 @@ requirements it satisfies.
     best-effort on failure; mastery summary correct
   - _Requirements: 5.3, 5.4, 5.5, 6.2, 6.3, 7.3_
 
-- [ ] 10. Add quiz client functions to `lib/api.ts`
+- [x] 10. Add quiz client functions to `lib/api.ts`
   - `getQuiz`, `recordQuizAnswer` (fire-and-forget), `getQuizMastery`
   - _Requirements: 4.1, 5.4_
 
-- [ ] 11. Extend `PlanPanel` into the study panel
+- [x] 11. Extend `PlanPanel` into the study panel
   - sticky header with total score, live streak, and path progress (mastered /
     total); per-topic pips + "Mastered" pill from mastery
   - lazy `getQuiz` on expand; notes (sections) then "Test yourself" MCQs
@@ -86,7 +86,7 @@ requirements it satisfies.
     never auto-open
   - _Requirements: 1.1, 1.2, 1.4, 4.1, 4.2, 4.3, 4.4, 4.5, 5.1, 5.3, 5.6_
 
-- [ ] 12. Final verification
+- [x] 12. Final verification
   - full backend suite + coverage + mutation spot-checks on new logic;
     `tsc --noEmit`; manual smoke (answer, see points, reopen -> still revealed)
   - _Requirements: 7.1, 7.2, 7.3_
