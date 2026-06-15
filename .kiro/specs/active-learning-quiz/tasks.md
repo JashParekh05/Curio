@@ -59,7 +59,7 @@ requirements it satisfies.
     background after `run_story_pass` (isolated, best-effort)
   - _Requirements: 2.1, 2.4, 7.1_
 
-- [ ] 8. Add `app/api/quiz.py` router and register in `main.py`
+- [x] 8. Add `app/api/quiz.py` router and register in `main.py`
   - `GET /{topic_slug}` (incl. answer for client grading; empty when none)
   - `POST /{question_id}/answer` -> 204: recompute correctness, award
     `points_for(streak)` (clamped) once per (question, user/session), record;
@@ -67,7 +67,7 @@ requirements it satisfies.
   - `GET /mastery/{user_id}` (+ session variant)
   - _Requirements: 4.1, 5.1, 5.3, 5.4, 5.5, 5.6, 6.1, 6.2_
 
-- [ ] 9. Fake-DB tests for the quiz API
+- [x] 9. Fake-DB tests for the quiz API
   - GET returns cached / empty; POST records once, never trusts client flag,
     best-effort on failure; mastery summary correct
   - _Requirements: 5.3, 5.4, 5.5, 6.2, 6.3, 7.3_
