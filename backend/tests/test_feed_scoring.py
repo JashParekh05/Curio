@@ -142,3 +142,21 @@ class TestOrderByArc:
         out = _order_by_arc(clips)
         assert {c.id for c in out} == {c.id for c in clips}
         assert len(out) == len(clips)
+
+    def test_narrative_rank_orders_within_beat_over_score(self):
+        # When a beat is story-ranked, narrative_rank wins over engagement score.
+        hi = make_clip(section_index=1, hook_score=0.9, source_url="x")
+        lo = make_clip(section_index=1, hook_score=0.1, source_url="y")
+        hi.final_score, lo.final_score = 0.9, 0.1
+        hi.narrative_rank, lo.narrative_rank = 1, 0  # story wants lo first
+        out = _order_by_arc([hi, lo])
+        assert [c.id for c in out] == [lo.id, hi.id]
+
+    def test_partial_narrative_rank_falls_back_to_score(self):
+        # If any clip in the beat lacks a rank, the beat uses score ordering.
+        a = make_clip(section_index=2, hook_score=0.2, source_url="a")
+        b = make_clip(section_index=2, hook_score=0.8, source_url="b")
+        a.final_score, b.final_score = 0.2, 0.8
+        a.narrative_rank = 0  # b has none
+        out = _order_by_arc([a, b])
+        assert [c.id for c in out] == [b.id, a.id]  # score order

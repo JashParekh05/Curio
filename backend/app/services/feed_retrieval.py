@@ -100,8 +100,15 @@ def _order_by_arc(clips: list[Clip]) -> list[Clip]:
 
     ordered: list[Clip] = []
     for _, group in groupby(sorted(clips, key=_beat), key=_beat):
-        beat = sorted(group, key=lambda c: c.final_score or c.hook_score, reverse=True)
-        ordered.extend(_spread_by_source(beat))
+        beat = list(group)
+        # If the story pass has ranked this beat, deliver in that narrative order
+        # (it was composed for flow). Otherwise rank by engagement/personalization
+        # score and spread sources so a beat from two videos doesn't clump.
+        if beat and all(c.narrative_rank is not None for c in beat):
+            ordered.extend(sorted(beat, key=lambda c: c.narrative_rank))
+        else:
+            beat = sorted(beat, key=lambda c: c.final_score or c.hook_score, reverse=True)
+            ordered.extend(_spread_by_source(beat))
     return ordered
 
 

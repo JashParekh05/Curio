@@ -44,6 +44,12 @@ async def _process_single_topic(slug: str, name: str) -> None:
                     )
                 except Exception as e:
                     logger.error(f"[topics] Pipeline failed for {slug} section {section['section_index']}: {e}")
+            # All beats generated — score + order the full sequence as one story.
+            try:
+                from app.services.story import run_story_pass
+                await asyncio.to_thread(run_story_pass, slug, name)
+            except Exception as e:
+                logger.error(f"[topics] Story pass failed for topic={slug}: {e}")
         else:
             try:
                 await asyncio.to_thread(run_pipeline, slug, name)

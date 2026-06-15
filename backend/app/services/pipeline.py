@@ -133,6 +133,14 @@ def _build_segment_prompt(segments_with_times: list[dict], topic_slug: str,
             "The FIRST clip must BRIDGE from the previous beat — open by paying off the "
             "curiosity the prior beat created, then carry the story forward."
         )
+        # The final beat is where retention is won or lost — make it resolve.
+        is_last = idx == 3 or (arc and idx == len(arc) - 1)
+        payoff = (
+            "\n- This is the CLOSING beat: the LAST clip must land the payoff — resolve the "
+            "central question the lesson opened with and leave the viewer with a clear, "
+            "satisfying \"so what\" (why this matters / what it unlocks), not a flat summary."
+            if is_last else ""
+        )
         return f"""You are cutting an educational video about "{topic_slug}" into a CONNECTED sequence of short reels (TikTok-style) for ONE specific beat of a 4-part micro-lesson.
 {arc_block}
 This beat is {role}.
@@ -141,10 +149,11 @@ What this beat must teach: {desc}
 
 Produce 2-3 clips that together form a mini-story for THIS beat:
 - Each clip MUST open with a hook. {_HOOKS_BLOCK}
+- Each clip must also deliver a self-contained micro-payoff — one satisfying insight — BEFORE its open loop, so a viewer who stops after any clip still walks away having learned something.
 - {bridge}
 - Order the clips so each one ends on an OPEN LOOP the next clip resolves — curiosity should pull the viewer from one clip to the next.
 - Every clip must serve THIS beat's role; do NOT drift into other beats' material.
-- No two clips may cover the same point. 45-90 seconds each, one clear idea each.
+- No two clips may cover the same point. 45-90 seconds each, one clear idea each.{payoff}
 
 Here is the transcript with timestamps:
 {transcript_json}

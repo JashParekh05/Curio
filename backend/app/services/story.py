@@ -98,10 +98,23 @@ def _valid_permutation(order, n: int) -> list[int] | None:
     return out if len(seen) == n else None
 
 
+def _derive_overall(verdict: dict) -> dict:
+    """Make overall_score consistent and explainable: the mean of the rubric
+    dimensions. The model's free-form overall tended to drift from its own
+    per-dimension scores, which made the STORY_PASS_SCORE gate unpredictable.
+    Falls back to the model's value if dimensions are missing/unusable."""
+    dims = verdict.get("dimensions")
+    if isinstance(dims, dict):
+        vals = [v for v in dims.values() if isinstance(v, (int, float))]
+        if vals:
+            verdict["overall_score"] = round(sum(vals) / len(vals), 4)
+    return verdict
+
+
 def _judge_story(topic_name: str, clips: list[dict]) -> dict:
     """Score the sequence on the narrative rubric and propose an order that
     maximizes flow. Returns parsed JSON; raises on API/parse failure (callers
-    handle that)."""
+    handle that). overall_score is normalized to the mean of the dimensions."""
     prompt = f"""You are a narrative director for short-form educational video, in the style of
 the most addictive, bingeable explainer channels. Your job is to make a set of
 clips about "{topic_name}" flow as ONE story that keeps a viewer watching.
@@ -127,7 +140,7 @@ Return ONLY JSON:
         model=MODEL, max_tokens=900, temperature=0,
         messages=[{"role": "user", "content": prompt}],
     )
-    return json.loads(_strip_json(resp.choices[0].message.content))
+    return _derive_overall(json.loads(_strip_json(resp.choices[0].message.content)))
 
 
 def _arc_clamp(clips: list[dict]) -> list[dict]:
@@ -171,3 +184,49 @@ def order_for_story(topic_name: str, clips: list[dict]) -> tuple[list[dict], dic
     level = logging.WARNING if (isinstance(score, (int, float)) and score < STORY_PASS_SCORE) else logging.INFO
     logger.log(level, f"[story] '{topic_name}' score={score} reordered={moved} order={order}")
     return reordered, verdict
+
+
+def run_story_pass(topic_slug: str, topic_name: str) -> dict | None:
+    """Generation-time entrypoint: score a topic's stored clips as a sequence
+    and persist the story_score + within-beat narrative order. Best-effort —
+    any failure is logged and skipped so it never blocks topic generation.
+
+    This is the only DB-touching function in the module; the judging and
+    ordering logic above stays pure and unit-testable.
+    """
+    from app.db.supabase import get_client
+    db = get_client()
+
+    try:
+        res = (
+            db.table("clips")
+            .select("id,section_index,title,description,transcript")
+            .eq("topic_slug", topic_slug)
+            .execute()
+        )
+    except Exception as exc:
+        logger.warning(f"[story] failed to load clips for '{topic_slug}': {exc}")
+        return None
+
+    clips = res.data or []
+    if len(clips) < 2:
+        return None
+
+    ordered, verdict = order_for_story(topic_name, clips)
+    if verdict is None:
+        return None
+
+    score = verdict.get("overall_score")
+    persisted = 0
+    for rank, clip in enumerate(ordered):
+        update: dict = {"narrative_rank": rank}
+        if isinstance(score, (int, float)):
+            update["story_score"] = score
+        try:
+            db.table("clips").update(update).eq("id", clip["id"]).execute()
+            persisted += 1
+        except Exception as exc:
+            logger.warning(f"[story] failed to persist clip {clip.get('id')} for '{topic_slug}': {exc}")
+
+    logger.info(f"[story] '{topic_slug}' story pass: score={score} persisted={persisted}/{len(ordered)}")
+    return verdict

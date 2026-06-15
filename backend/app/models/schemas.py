@@ -35,6 +35,7 @@ class Clip(BaseModel):
     final_score: float | None = None
     created_at: str | None = None
     section_index: int | None = None
+    narrative_rank: int | None = None
     embedding: list[float] | None = Field(default=None, exclude=True)
 
     @field_validator("embedding", mode="before")

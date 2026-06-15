@@ -1,5 +1,5 @@
 from app.services import story as st
-from app.services.story import _valid_permutation, _clip_text, order_for_story
+from app.services.story import _valid_permutation, _clip_text, order_for_story, _derive_overall, run_story_pass
 
 
 def _clips(n):
@@ -133,3 +133,102 @@ class TestOrderForStory:
         monkeypatch.setattr(st, "_judge_story", lambda t, c: _verdict([0, 1]))
         out, _ = order_for_story("Topic", clips)
         assert [c["title"] for c in out] == ["hook", "loose"]
+
+
+class TestDeriveOverall:
+    def test_overall_is_mean_of_dimensions(self):
+        v = _derive_overall({"overall_score": 0.99, "dimensions": {"a": 0.2, "b": 0.4, "c": 0.6}})
+        assert v["overall_score"] == 0.4  # mean, overriding the model's 0.99
+
+    def test_ignores_non_numeric_dimensions(self):
+        v = _derive_overall({"overall_score": 0.5, "dimensions": {"a": 0.8, "b": "bad"}})
+        assert v["overall_score"] == 0.8
+
+    def test_falls_back_when_no_usable_dimensions(self):
+        v = _derive_overall({"overall_score": 0.5, "dimensions": {}})
+        assert v["overall_score"] == 0.5
+        v2 = _derive_overall({"overall_score": 0.5})
+        assert v2["overall_score"] == 0.5
+
+
+class _FakeTable:
+    def __init__(self, rows, sink):
+        self._rows = rows
+        self._sink = sink
+        self._mode = None
+        self._payload = None
+
+    def select(self, *a, **k):
+        self._mode = "select"
+        return self
+
+    def update(self, payload):
+        self._mode = "update"
+        self._payload = payload
+        return self
+
+    def eq(self, col, val):
+        if self._mode == "update":
+            self._pending_id = val
+        return self
+
+    def execute(self):
+        if self._mode == "update":
+            self._sink.append((self._pending_id, self._payload))
+            return type("R", (), {"data": []})()
+        return type("R", (), {"data": self._rows})()
+
+
+class _FakeDB:
+    def __init__(self, rows, sink):
+        self._rows, self._sink = rows, sink
+
+    def table(self, name):
+        return _FakeTable(self._rows, self._sink)
+
+
+class TestRunStoryPass:
+    def _patch_db(self, monkeypatch, rows, sink):
+        import app.db.supabase as supa
+        monkeypatch.setattr(supa, "get_client", lambda: _FakeDB(rows, sink))
+
+    def test_persists_narrative_rank_and_score(self, monkeypatch):
+        rows = [
+            {"id": "c0", "section_index": 0, "title": "a", "description": "", "transcript": ""},
+            {"id": "c1", "section_index": 0, "title": "b", "description": "", "transcript": ""},
+            {"id": "c2", "section_index": 1, "title": "c", "description": "", "transcript": ""},
+        ]
+        sink = []
+        self._patch_db(monkeypatch, rows, sink)
+        # judge reverses §0's two clips; arc clamp keeps §0 before §1.
+        monkeypatch.setattr(st, "_judge_story", lambda t, c: {
+            "overall_score": 0.8, "dimensions": {"x": 0.8}, "order": [1, 0, 2],
+            "clips": [],
+        })
+        verdict = run_story_pass("topic", "Topic")
+        assert verdict is not None
+        writes = dict(sink)
+        # ranks are 0,1,2 in story order: c1 first, then c0, then c2
+        assert writes["c1"]["narrative_rank"] == 0
+        assert writes["c0"]["narrative_rank"] == 1
+        assert writes["c2"]["narrative_rank"] == 2
+        assert all(w["story_score"] == 0.8 for w in writes.values())
+
+    def test_under_two_clips_skips(self, monkeypatch):
+        sink = []
+        self._patch_db(monkeypatch, [{"id": "c0", "section_index": 0, "title": "a"}], sink)
+        assert run_story_pass("topic", "Topic") is None
+        assert sink == []
+
+    def test_judge_failure_persists_nothing(self, monkeypatch):
+        rows = [
+            {"id": "c0", "section_index": 0, "title": "a", "description": "", "transcript": ""},
+            {"id": "c1", "section_index": 1, "title": "b", "description": "", "transcript": ""},
+        ]
+        sink = []
+        self._patch_db(monkeypatch, rows, sink)
+        def boom(t, c):
+            raise RuntimeError("down")
+        monkeypatch.setattr(st, "_judge_story", boom)
+        assert run_story_pass("topic", "Topic") is None
+        assert sink == []
