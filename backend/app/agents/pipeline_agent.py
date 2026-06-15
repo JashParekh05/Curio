@@ -45,7 +45,10 @@ def _node_search(state: PipelineState) -> dict:
             "key": api_key,
             "q": query,
             "type": "video",
-            "videoDuration": "short",
+            # "medium" = 4-20 min. The section planner writes queries targeting a
+            # focused 5-10 min explainer; "short" (<4 min) filtered those out and
+            # contradicted the query intent, starving segmentation of substance.
+            "videoDuration": "medium",
             "videoEmbeddable": "true",
             "safeSearch": "strict",
             "relevanceLanguage": "en",
@@ -64,19 +67,30 @@ def _node_search(state: PipelineState) -> dict:
     video_ids = [i["id"]["videoId"] for i in items]
     details = requests.get(
         "https://www.googleapis.com/youtube/v3/videos",
-        params={"key": api_key, "id": ",".join(video_ids), "part": "contentDetails,snippet"},
+        params={"key": api_key, "id": ",".join(video_ids), "part": "contentDetails,snippet,statistics"},
         timeout=10,
     )
     logger.info(f"[pipeline_agent] videos.list (~1 unit)")
 
     durations: dict[str, int] = {}
+    captions: dict[str, bool] = {}
+    views: dict[str, int] = {}
     if details.ok:
         import re
         for v in details.json().get("items", []):
-            m = re.match(r"PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?", v["contentDetails"]["duration"])
+            cd = v.get("contentDetails", {})
+            m = re.match(r"PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?", cd.get("duration", ""))
             if m:
                 h, mn, s = (int(x or 0) for x in m.groups())
                 durations[v["id"]] = h * 3600 + mn * 60 + s
+            # Uploader-provided caption flag. NOTE: this is False for videos that
+            # only have YouTube auto-generated captions, which TranscriptAPI can
+            # still fetch — so we use it as a soft ranking bonus, never a filter.
+            captions[v["id"]] = cd.get("caption") == "true"
+            try:
+                views[v["id"]] = int(v.get("statistics", {}).get("viewCount", 0))
+            except (TypeError, ValueError):
+                views[v["id"]] = 0
 
     videos = []
     for item in items:
@@ -88,6 +102,8 @@ def _node_search(state: PipelineState) -> dict:
             "description": snippet.get("description", "")[:200] or None,
             "thumbnail_url": snippet.get("thumbnails", {}).get("high", {}).get("url"),
             "duration_seconds": durations.get(vid_id, 180),
+            "has_caption": captions.get(vid_id, False),
+            "view_count": views.get(vid_id, 0),
         })
 
     if videos:
@@ -95,17 +111,73 @@ def _node_search(state: PipelineState) -> dict:
     return {"videos": videos}
 
 
+def _popularity_bonus(view_count: int) -> float:
+    """Map raw view count to a small [0, 0.1] bonus on a log scale, so a
+    well-watched video edges out a similarly-relevant obscure one without
+    letting raw popularity override relevance. ~1k views ≈ 0.04, ~1M ≈ 0.075,
+    ~100M ≈ 0.10. Capped so a viral video can't dominate the ranking."""
+    import math
+    if not view_count or view_count <= 0:
+        return 0.0
+    return min(math.log10(view_count + 1) / 80.0, 0.1)
+
+
+def _rank_candidates(videos: list[dict], query: str) -> list[dict]:
+    """Order search candidates by semantic relevance to the section query so the
+    best-matching video is transcribed first (instead of YouTube's raw order).
+
+    Relevance is primary. Caption availability and view count are light
+    tiebreakers — a captioned, well-watched video edges out a similarly-relevant
+    one, but popularity never overrides a clearly more relevant video (keeps the
+    feed from collapsing onto the same few viral hits). Best-effort: if
+    embeddings are unavailable or the candidates carry no text, the original
+    order is preserved so this can never make selection worse.
+    """
+    if len(videos) <= 1 or not query:
+        return videos
+    texts = [f"{v.get('title', '')} {v.get('description') or ''}".strip() for v in videos]
+    if not any(texts):
+        return videos
+
+    from app.services.embeddings import embed_text, embed_texts, cosine_similarity
+
+    q_vec = embed_text(query)
+    if q_vec is None:
+        # No embeddings: float captioned, then higher-view videos ahead.
+        return sorted(videos, key=lambda v: (0 if v.get("has_caption") else 1,
+                                             -_popularity_bonus(v.get("view_count", 0))))
+
+    vecs = embed_texts(texts)
+
+    def _score(pair) -> float:
+        v, vec = pair
+        sim = cosine_similarity(q_vec, vec) if vec else -1.0
+        caption = 0.05 if v.get("has_caption") else 0.0
+        return sim + caption + _popularity_bonus(v.get("view_count", 0))
+
+    ranked = sorted(zip(videos, vecs), key=_score, reverse=True)
+    order = [v.get("video_id") for v, _ in ranked]
+    logger.info(f"[pipeline_agent] ranked {len(videos)} candidates by relevance to query='{query}': {order}")
+    return [v for v, _ in ranked]
+
+
 def _node_transcribe(state: PipelineState) -> dict:
     """Candidate bounding: we search 6 videos for recall, but only transcribe +
     keep the top few that actually have transcripts. Segmentation downstream is
     the bottleneck (one LLM call per video), so capping here cuts time-to-clips
     and OpenAI cost ~6-12x. The first section keeps just one video so the very
-    first clip lands fastest (progressive backfill handles the rest)."""
+    first clip lands fastest (progressive backfill handles the rest).
+
+    Candidates are relevance-ranked first, so the one(s) we keep are the best
+    semantic match to the section query, not just YouTube's top result."""
     from app.services.youtube import _fetch_transcript
+
+    query = state.get("search_query") or state.get("topic_name", "")
+    candidates = _rank_candidates(state["videos"], query)
 
     limit = 1 if state.get("section_index") == 0 else 2
     kept, errors = [], []
-    for v in state["videos"]:
+    for v in candidates:
         if len(kept) >= limit:
             break
         transcript = _fetch_transcript(v["video_id"])
