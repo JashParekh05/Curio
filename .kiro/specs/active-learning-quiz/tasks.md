@@ -30,31 +30,31 @@ requirements it satisfies.
     fail, then revert
   - _Requirements: 2.2, 5.2, 5.3, 5.6, 6.4, 7.3_
 
-- [ ] 3. Add the LLM stages to `quiz.py`
+- [x] 3. Add the LLM stages to `quiz.py`
   - `_build_question_prompt(...)`: pure; MUST instruct MCQ-only and substance-
     over-trivia
   - `_generate_questions(...)`, `_judge_question(topic_name, q)` with bounded
     regenerate (mirrors section/story judges)
   - _Requirements: 2.1, 2.6, 3.1, 3.2, 3.3_
 
-- [ ] 4. Test prompt building and judge gating
+- [x] 4. Test prompt building and judge gating
   - prompt asserts MCQ-only + anti-trivia instructions present
   - mocked judge: a flagged question is regenerated then discarded after the
     bound; only passing questions survive
   - _Requirements: 2.2, 3.1, 3.2, 3.3, 7.3_
 
-- [ ] 5. Add `generate_and_store_questions(topic_slug, topic_name)` orchestration
+- [x] 5. Add `generate_and_store_questions(topic_slug, topic_name)` orchestration
   - idempotent (skip if cached), best-effort (never raises); gather sections +
     sampled clip transcripts; generate -> validate -> judge -> store passes
   - fake-DB tests: skip when cached, store only validated+judged, never raise on
     LLM/DB failure
   - _Requirements: 2.1, 2.4, 2.5, 3.3, 7.1, 7.2_
 
-- [ ] 6. Add `scripts/migration_quiz.sql` (additive, nullable)
+- [x] 6. Add `scripts/migration_quiz.sql` (additive, nullable)
   - `quiz_questions` and `quiz_results` tables + indexes
   - _Requirements: 6.1, 6.3, 7.4_
 
-- [ ] 7. Trigger generation after a topic's story pass
+- [x] 7. Trigger generation after a topic's story pass
   - in `_process_single_topic`, queue `generate_and_store_questions` in the
     background after `run_story_pass` (isolated, best-effort)
   - _Requirements: 2.1, 2.4, 7.1_

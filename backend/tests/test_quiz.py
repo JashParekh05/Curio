@@ -130,3 +130,129 @@ class TestSummarizeMastery:
         results = [{"topic_slug": "t", "correct": True, "points": 10} for _ in range(3)]
         out = summarize_mastery(results)
         assert out["topics"]["t"]["answered"] == 3 and out["topics"]["t"]["points"] == 30
+
+
+# --- task 4: prompt building + judge gating --------------------------------
+
+from app.services import quiz as quiz_mod
+from app.services.quiz import _build_question_prompt, _vet_questions
+
+
+class TestBuildQuestionPrompt:
+    def test_instructs_mcq_only_and_anti_trivia(self):
+        p = _build_question_prompt("Binary Search Trees",
+                                   [{"title": "What is a BST", "description": "ordered tree"}],
+                                   ["a transcript excerpt"])
+        assert "MULTIPLE-CHOICE" in p
+        assert "Do NOT produce true/false or open-ended" in p
+        assert "NOT trivia about the video" in p
+
+    def test_includes_sections_and_excerpt(self):
+        p = _build_question_prompt("T", [{"title": "Sec", "description": "desc"}], ["hello world"])
+        assert "Sec" in p and "desc" in p and "hello world" in p
+
+    def test_handles_empty_inputs(self):
+        p = _build_question_prompt("T", [], [])
+        assert "no section outline available" in p
+
+    def test_truncates_excerpt_to_budget(self):
+        long = "x" * 5000
+        p = _build_question_prompt("T", [], [long])
+        # the excerpt is capped; the full 5000-char blob is not embedded whole
+        assert "x" * 5000 not in p
+
+
+class TestVetQuestions:
+    def _good(self, i=0):
+        return {"question": f"Q{i}?", "options": ["a", "b", "c"], "correct_index": 0, "explanation": "why"}
+
+    def test_keeps_only_judge_approved_valid_questions(self, monkeypatch):
+        # q0 approved, q1 flagged by judge, q2 invalid (2 correct -> rejected by validator)
+        raw = [self._good(0), self._good(1), {"question": "bad", "options": ["a"], "correct_index": 0, "explanation": "x"}]
+        def fake_judge(topic, q):
+            return {"ok": q["question"] != "Q1?", "issue": "" if q["question"] != "Q1?" else "ambiguous"}
+        monkeypatch.setattr(quiz_mod, "_judge_question", fake_judge)
+        kept = _vet_questions("T", raw)
+        assert [q["question"] for q in kept] == ["Q0?"]
+
+    def test_invalid_questions_dropped_before_judging(self, monkeypatch):
+        calls = {"n": 0}
+        monkeypatch.setattr(quiz_mod, "_judge_question",
+                            lambda t, q: calls.__setitem__("n", calls["n"] + 1) or {"ok": True, "issue": ""})
+        # single-option question is invalid -> judge never called for it
+        _vet_questions("T", [{"question": "x", "options": ["only"], "correct_index": 0, "explanation": "e"}])
+        assert calls["n"] == 0
+
+    def test_judge_failure_drops_only_that_question(self, monkeypatch):
+        def flaky_judge(topic, q):
+            if q["question"] == "Q1?":
+                raise RuntimeError("judge down")
+            return {"ok": True, "issue": ""}
+        monkeypatch.setattr(quiz_mod, "_judge_question", flaky_judge)
+        kept = _vet_questions("T", [self._good(0), self._good(1), self._good(2)])
+        assert [q["question"] for q in kept] == ["Q0?", "Q2?"]
+
+    def test_empty_input(self):
+        assert _vet_questions("T", []) == []
+        assert _vet_questions("T", None) == []
+
+
+# --- task 5: generate_and_store_questions orchestration (fake DB) ----------
+
+from app.services.quiz import generate_and_store_questions
+from tests.conftest import FakeDB
+
+
+def _patch_quiz_db(monkeypatch, store, fail=None):
+    db = FakeDB(store=store, fail=fail or set())
+    import app.db.supabase as supa
+    monkeypatch.setattr(supa, "get_client", lambda: db)
+    return db
+
+
+def _store(existing_questions=None, sections=None, clips=None):
+    return {
+        "quiz_questions": existing_questions or [],
+        "topic_sections": sections or [{"topic_slug": "t", "title": "Sec", "description": "d", "section_index": 0}],
+        "clips": clips or [{"topic_slug": "t", "transcript": "some transcript"}],
+    }
+
+
+class TestGenerateAndStoreQuestions:
+    def _vetted(self):
+        return [{"question": "Q?", "options": ["a", "b"], "correct_index": 0, "explanation": "e"}]
+
+    def test_stores_vetted_questions(self, monkeypatch):
+        db = _patch_quiz_db(monkeypatch, _store())
+        monkeypatch.setattr(quiz_mod, "_generate_questions", lambda *a, **k: [{"raw": 1}])
+        monkeypatch.setattr(quiz_mod, "_vet_questions", lambda t, raw: self._vetted())
+        n = generate_and_store_questions("t", "Topic")
+        assert n == 1
+        inserted = [p for tbl, p in db.rec["inserts"] if tbl == "quiz_questions"]
+        assert len(inserted) == 1
+        assert inserted[0]["topic_slug"] == "t" and inserted[0]["question"] == "Q?"
+
+    def test_idempotent_skip_when_cached(self, monkeypatch):
+        _patch_quiz_db(monkeypatch, _store(existing_questions=[{"id": "q1", "topic_slug": "t"}]))
+        called = {"gen": False}
+        monkeypatch.setattr(quiz_mod, "_generate_questions",
+                            lambda *a, **k: called.__setitem__("gen", True) or [])
+        assert generate_and_store_questions("t", "Topic") == 0
+        assert called["gen"] is False
+
+    def test_nothing_to_generate_from(self, monkeypatch):
+        _patch_quiz_db(monkeypatch, {"quiz_questions": [], "topic_sections": [], "clips": []})
+        assert generate_and_store_questions("t", "Topic") == 0
+
+    def test_generation_failure_never_raises(self, monkeypatch):
+        _patch_quiz_db(monkeypatch, _store())
+        def boom(*a, **k):
+            raise RuntimeError("LLM down")
+        monkeypatch.setattr(quiz_mod, "_generate_questions", boom)
+        assert generate_and_store_questions("t", "Topic") == 0  # no exception
+
+    def test_no_questions_pass_gate(self, monkeypatch):
+        _patch_quiz_db(monkeypatch, _store())
+        monkeypatch.setattr(quiz_mod, "_generate_questions", lambda *a, **k: [{"raw": 1}])
+        monkeypatch.setattr(quiz_mod, "_vet_questions", lambda t, raw: [])
+        assert generate_and_store_questions("t", "Topic") == 0

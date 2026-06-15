@@ -50,6 +50,9 @@ class _FakeQuery:
     def upsert(self, payload, **k):
         self.op = "upsert"; self.payload = payload; return self
 
+    def insert(self, payload, **k):
+        self.op = "insert"; self.payload = payload; return self
+
     def eq(self, col, val):
         self.filters[col] = val; return self
 
@@ -68,6 +71,10 @@ class _FakeQuery:
         if self.op == "upsert":
             self.rec["upserts"].append((self.table, self.payload))
             return _FakeResult([])
+        if self.op == "insert":
+            self.rec["inserts"].append((self.table, self.payload))
+            self.store.setdefault(self.table, []).append(self.payload)
+            return _FakeResult([self.payload])
         rows = self.store.get(self.table, [])
         out = []
         for r in rows:
@@ -96,7 +103,7 @@ class FakeDB:
     def __init__(self, store=None, fail=None):
         self.store = store or {}
         self.fail = fail or set()
-        self.rec = {"upserts": [], "rpcs": []}
+        self.rec = {"upserts": [], "rpcs": [], "inserts": []}
 
     def table(self, name):
         return _FakeQuery(name, self.store, self.rec, self.fail)

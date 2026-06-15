@@ -50,6 +50,12 @@ async def _process_single_topic(slug: str, name: str) -> None:
                 await asyncio.to_thread(run_story_pass, slug, name)
             except Exception as e:
                 logger.error(f"[topics] Story pass failed for topic={slug}: {e}")
+            # Generate the active-learning quiz from the finished topic (best-effort).
+            try:
+                from app.services.quiz import generate_and_store_questions
+                await asyncio.to_thread(generate_and_store_questions, slug, name)
+            except Exception as e:
+                logger.error(f"[topics] Quiz generation failed for topic={slug}: {e}")
         else:
             try:
                 await asyncio.to_thread(run_pipeline, slug, name)
