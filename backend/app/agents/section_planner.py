@@ -242,8 +242,14 @@ def _plan_sections(topic_name: str, difficulty: str = "intermediate", path_conte
             logger.warning(f"[section_planner] judge failed for '{topic_name}': {exc}")
             break
         weak = _sections_needing_revision(judge)
-        logger.info(f"[section_planner] '{topic_name}' judge round {attempt + 1}: "
-                    f"score={judge.get('overall_score')} weak={weak}")
+        if weak:
+            issues = {s.get("section_index"): s.get("issue", "")
+                      for s in judge.get("sections", []) if not s.get("ok", True)}
+            logger.info(f"[section_planner] '{topic_name}' judge round {attempt + 1}: "
+                        f"score={judge.get('overall_score')} weak={weak} issues={issues}")
+        else:
+            logger.info(f"[section_planner] '{topic_name}' judge round {attempt + 1}: "
+                        f"score={judge.get('overall_score')} all ok")
         if not weak:
             break
         try:
