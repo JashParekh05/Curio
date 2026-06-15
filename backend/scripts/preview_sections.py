@@ -13,7 +13,11 @@ runs; the final plan and a fresh judge verdict on it print at the end.
 import logging
 import sys
 
+from dotenv import load_dotenv
+
 from app.agents.section_planner import _plan_sections, _judge_sections
+
+load_dotenv()  # pick up OPENAI_API_KEY from backend/.env, like the other scripts
 
 
 def main() -> None:
