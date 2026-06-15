@@ -30,16 +30,23 @@ from scripts.preview_retrieval import _fetch_candidates
 
 def _collect_clips(topic: str, difficulty: str) -> list[dict]:
     plan = _plan_sections(topic, difficulty)
+    arc_titles = [s.get("title", "") for s in plan]
     clips: list[dict] = []
     for section in plan:
         sec_idx = section["section_index"]
         query = section["search_query"]
+        section_context = {
+            "section_index": sec_idx,
+            "title": section.get("title", ""),
+            "description": section.get("description", ""),
+            "arc_titles": arc_titles,
+        }
         candidates = _rank_candidates(_fetch_candidates(query), query)
         for v in candidates:
             transcript = _fetch_transcript(v["video_id"])
             if not transcript:
                 continue
-            for seg in _identify_segments(transcript, topic):
+            for seg in _identify_segments(transcript, topic, section_context):
                 clips.append({
                     "section_index": sec_idx,
                     "title": seg.get("title", ""),

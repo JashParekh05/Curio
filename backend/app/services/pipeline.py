@@ -73,41 +73,111 @@ def _extract_video_id(url: str) -> str | None:
     return vid
 
 
-def _identify_segments(transcript: list[dict], topic_slug: str) -> list[dict]:
-    segments_with_times = [
-        {"start": s["start"], "end": s["start"] + s["duration"], "text": s["text"]}
-        for s in transcript
-    ]
+# The role each beat plays in the 4-part micro-lesson arc. Lets segmentation
+# cut clips that fit THIS beat instead of drifting into other beats' material.
+_ARC_ROLES = {
+    0: "the HOOK — spark curiosity and motivate why this topic matters",
+    1: "the DEFINITION — establish the core concept in plain language",
+    2: "the MECHANICS — show how it actually works, the real substance",
+    3: "the OUTCOMES — the significance, applications, and payoff",
+}
 
-    client = _get_client()
-    prompt = f"""You are cutting an educational video about "{topic_slug}" into short reels optimized for viewer retention (TikTok-style).
-
-CRITICAL RULE: Every segment MUST open with a hook — the very first words of the segment should grab attention. Strong hooks are:
+_HOOKS_BLOCK = """Strong hooks are:
 - A surprising or counterintuitive claim: "Most people believe X, but actually..."
 - A question that creates curiosity: "Why does X happen even when Y?"
 - A stakes-setter: "If you get this wrong, the whole thing falls apart"
 - A counterexample: "Here's where every textbook gets it wrong"
-Avoid segments that open with intros, transitions, or "In this section we will..."
+Avoid segments that open with intros, transitions, or "In this section we will...\""""
 
-Here is the transcript with timestamps:
-{json.dumps(segments_with_times[:300], indent=2)}
-
-Identify ONLY 2-3 segments — the single most hook-worthy moments. Each 45-90 seconds long, each covering one clear idea. Prefer cuts that start mid-thought at a moment of tension or revelation. More can be generated later if users engage; quality over quantity.
-
-For each segment, score its hook quality: 1.0 = irresistible opening, 0.5 = adequate, 0.0 = boring intro.
-Write the title as a curiosity-gap phrase (max 8 words) — something that makes the viewer NEED to know more.
-
-Return a JSON array only, no other text:
+_JSON_SHAPE = """Return a JSON array only, no other text:
 [
-  {{
+  {
     "title": "Why Nobody Understands This Correctly",
     "description": "One sentence that makes them want to watch",
     "start": 12.5,
     "end": 72.3,
     "transcript": "the text spoken in this segment",
     "hook_score": 0.85
-  }}
+  }
 ]"""
+
+
+def _build_segment_prompt(segments_with_times: list[dict], topic_slug: str,
+                          section_context: dict | None) -> str:
+    """Build the segmentation prompt.
+
+    With section_context the cuts are narrative-aware: they fulfill this beat's
+    role in the 4-part arc and form a CONNECTED mini-sequence that bridges from
+    the previous beat and ends on an open loop. Without it, this falls back to
+    the original standalone hook-cut behavior (used by legacy / non-section
+    callers), so existing behavior is unchanged when no context is supplied.
+    """
+    transcript_json = json.dumps(segments_with_times[:300], indent=2)
+
+    if section_context:
+        idx = section_context.get("section_index")
+        role = _ARC_ROLES.get(idx, "one beat of the lesson")
+        title = section_context.get("title", "")
+        desc = section_context.get("description", "")
+        arc = section_context.get("arc_titles") or []
+        arc_block = ""
+        if arc:
+            arc_lines = "\n".join(
+                f"  {i}. {t}{'   <-- THIS BEAT' if i == idx else ''}" for i, t in enumerate(arc)
+            )
+            arc_block = f"\nThe full lesson arc (4 beats, in order):\n{arc_lines}\n"
+        bridge = (
+            "Because this is the opening beat, the FIRST clip must cold-open the entire "
+            "lesson with the strongest possible hook."
+            if idx == 0 else
+            "The FIRST clip must BRIDGE from the previous beat — open by paying off the "
+            "curiosity the prior beat created, then carry the story forward."
+        )
+        return f"""You are cutting an educational video about "{topic_slug}" into a CONNECTED sequence of short reels (TikTok-style) for ONE specific beat of a 4-part micro-lesson.
+{arc_block}
+This beat is {role}.
+Beat title: "{title}"
+What this beat must teach: {desc}
+
+Produce 2-3 clips that together form a mini-story for THIS beat:
+- Each clip MUST open with a hook. {_HOOKS_BLOCK}
+- {bridge}
+- Order the clips so each one ends on an OPEN LOOP the next clip resolves — curiosity should pull the viewer from one clip to the next.
+- Every clip must serve THIS beat's role; do NOT drift into other beats' material.
+- No two clips may cover the same point. 45-90 seconds each, one clear idea each.
+
+Here is the transcript with timestamps:
+{transcript_json}
+
+For each clip, score its hook quality: 1.0 = irresistible opening, 0.5 = adequate, 0.0 = boring intro.
+Write the title as a curiosity-gap phrase (max 8 words). Return the clips IN PLAYBACK ORDER.
+
+{_JSON_SHAPE}"""
+
+    return f"""You are cutting an educational video about "{topic_slug}" into short reels optimized for viewer retention (TikTok-style).
+
+CRITICAL RULE: Every segment MUST open with a hook — the very first words of the segment should grab attention. {_HOOKS_BLOCK}
+
+Here is the transcript with timestamps:
+{transcript_json}
+
+Identify ONLY 2-3 segments — the single most hook-worthy moments. Each 45-90 seconds long, each covering one clear idea. Prefer cuts that start mid-thought at a moment of tension or revelation. More can be generated later if users engage; quality over quantity.
+
+For each segment, score its hook quality: 1.0 = irresistible opening, 0.5 = adequate, 0.0 = boring intro.
+Write the title as a curiosity-gap phrase (max 8 words) — something that makes the viewer NEED to know more.
+
+{_JSON_SHAPE}"""
+
+
+def _identify_segments(transcript: list[dict], topic_slug: str,
+                       section_context: dict | None = None) -> list[dict]:
+    segments_with_times = [
+        {"start": s["start"], "end": s["start"] + s["duration"], "text": s["text"]}
+        for s in transcript
+    ]
+
+    client = _get_client()
+    prompt = _build_segment_prompt(segments_with_times, topic_slug, section_context)
 
     try:
         response = client.chat.completions.create(

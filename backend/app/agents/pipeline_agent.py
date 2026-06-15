@@ -13,6 +13,9 @@ class PipelineState(TypedDict):
     topic_name: str
     search_query: str | None     # section-specific query; overrides default if set
     section_index: int | None    # which section these clips belong to
+    section_title: str | None    # this beat's title (for narrative-aware cutting)
+    section_description: str | None  # what this beat must teach
+    arc_titles: list[str]        # all 4 beat titles in order, for narrative context
     clear_existing: bool         # delete old clips before storing (False for sections 1-3)
     videos: list[dict]           # raw YouTube search items + details
     clips: list[dict]            # segmented clips ready for DB
@@ -195,6 +198,19 @@ def _node_segment(state: PipelineState) -> dict:
     topic_slug = state["topic_slug"]
     clips = []
 
+    # When this run belongs to a section, give segmentation the beat's role and
+    # the surrounding arc so it cuts a connected mini-story instead of isolated
+    # hooks. Non-section runs (e.g. discover seeding) pass None and keep the
+    # original standalone behavior.
+    section_context = None
+    if state.get("section_index") is not None:
+        section_context = {
+            "section_index": state.get("section_index"),
+            "title": state.get("section_title") or "",
+            "description": state.get("section_description") or "",
+            "arc_titles": state.get("arc_titles") or [],
+        }
+
     for v in state["videos"]:
         vid_id = v["video_id"]
         base = {
@@ -212,7 +228,7 @@ def _node_segment(state: PipelineState) -> dict:
         }
         if v.get("transcript"):
             try:
-                segments = _identify_segments(v["transcript"], topic_slug)
+                segments = _identify_segments(v["transcript"], topic_slug, section_context)
                 for seg in segments:
                     clips.append({
                         **base,
@@ -278,8 +294,16 @@ def run_pipeline(
     search_query: str | None = None,
     section_index: int | None = None,
     clear_existing: bool = True,
+    section_title: str | None = None,
+    section_description: str | None = None,
+    arc_titles: list[str] | None = None,
 ) -> int:
-    """Run the full pipeline for a topic (or one section of a topic). Returns clips stored."""
+    """Run the full pipeline for a topic (or one section of a topic). Returns clips stored.
+
+    section_title/section_description/arc_titles give the segmenter narrative
+    context so a section's clips form a connected mini-story; they're optional
+    so non-section callers (discover seeding, recommendations) are unaffected.
+    """
     global _pipeline_graph
     if _pipeline_graph is None:
         _pipeline_graph = build_pipeline_graph()
@@ -289,6 +313,9 @@ def run_pipeline(
         "topic_name": topic_name,
         "search_query": search_query,
         "section_index": section_index,
+        "section_title": section_title,
+        "section_description": section_description,
+        "arc_titles": arc_titles or [],
         "clear_existing": clear_existing,
         "videos": [],
         "clips": [],

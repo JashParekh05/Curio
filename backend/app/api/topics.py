@@ -28,6 +28,7 @@ async def _process_single_topic(slug: str, name: str) -> None:
             sections = []
 
         if sections:
+            arc_titles = [s.get("title", "") for s in sections]
             for i, section in enumerate(sections):
                 try:
                     await asyncio.to_thread(
@@ -37,6 +38,9 @@ async def _process_single_topic(slug: str, name: str) -> None:
                         section["search_query"],
                         section["section_index"],
                         i == 0,  # clear existing clips only before the first section
+                        section.get("title"),
+                        section.get("description"),
+                        arc_titles,
                     )
                 except Exception as e:
                     logger.error(f"[topics] Pipeline failed for {slug} section {section['section_index']}: {e}")
