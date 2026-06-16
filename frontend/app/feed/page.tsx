@@ -492,16 +492,18 @@ function FeedContent() {
           <button
             onClick={() => goTo(activeIndex - 1)}
             disabled={activeIndex === 0}
-            className="brutal-dark-btn bg-ink w-9 h-9 flex items-center justify-center text-white disabled:opacity-20 disabled:translate-x-0 disabled:translate-y-0 disabled:shadow-brutal-white"
+            aria-label="Previous clip"
+            className="brutal-dark-btn bg-ink w-9 h-9 flex items-center justify-center text-white font-black disabled:opacity-20 disabled:translate-x-0 disabled:translate-y-0 disabled:shadow-brutal-white"
           >
-            ▲
+            ^
           </button>
           <button
             onClick={() => goTo(activeIndex + 1)}
-            disabled={activeIndex >= clips.length}
-            className="brutal-dark-btn bg-ink w-9 h-9 flex items-center justify-center text-white disabled:opacity-20 disabled:translate-x-0 disabled:translate-y-0 disabled:shadow-brutal-white"
+            disabled={activeIndex >= clips.length - 1}
+            aria-label="Next clip"
+            className="brutal-dark-btn bg-ink w-9 h-9 flex items-center justify-center text-white font-black disabled:opacity-20 disabled:translate-x-0 disabled:translate-y-0 disabled:shadow-brutal-white"
           >
-            ▼
+            v
           </button>
         </div>
       )}

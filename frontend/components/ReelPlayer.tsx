@@ -112,6 +112,7 @@ export default function ReelPlayer({ clip, active, onEnded, onFeedback }: Props)
           <button
             onClick={() => { setFeedback("want_more"); onFeedback("want_more"); }}
             disabled={feedback !== null}
+            aria-label="I want more of this"
             className={`brutal-dark-btn w-12 h-12 flex items-center justify-center text-[10px] font-extrabold uppercase tracking-tight disabled:cursor-default ${
               feedback === "want_more"
                 ? "bg-accent-orange text-ink"
@@ -124,6 +125,7 @@ export default function ReelPlayer({ clip, active, onEnded, onFeedback }: Props)
           <button
             onClick={() => { setFeedback("already_know"); onFeedback("already_know"); }}
             disabled={feedback !== null}
+            aria-label="I already know this topic"
             className={`brutal-dark-btn w-12 h-12 flex items-center justify-center text-[10px] font-extrabold uppercase tracking-tight disabled:cursor-default ${
               feedback === "already_know"
                 ? "bg-accent-lime text-ink"
