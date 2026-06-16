@@ -375,37 +375,11 @@ async def get_discover_feed(user_id: str, background_tasks: BackgroundTasks, lim
 @limiter.limit("120/minute")
 async def record_clip_event(request: Request, clip_id: str, event: ClipEvent, caller_id: str = Depends(require_user)):
     db = get_client()
-    base_row = {
-        "clip_id": clip_id,
-        "session_id": event.session_id,
-        "watch_ms": event.watch_ms,
-        "completed": event.completed,
-        "replay_count": event.replay_count,
-    }
-    try:
-        # Persist feedback (🔥/✓) so it survives as history, not just as a live
-        # vector nudge. Falls back to core columns if the `feedback` column hasn't
-        # been migrated yet, so telemetry is never lost.
-        db.table("clip_events").insert({**base_row, "feedback": event.feedback}).execute()
-    except Exception:
-        try:
-            db.table("clip_events").insert(base_row).execute()
-        except Exception as e:
-            logger.warning(f"Failed to record event for clip {clip_id}: {e}")
-            return
 
-    # Personalize on every event. Session-feed events update both session- and
-    # user-level vectors; topic-feed/discover events have no session but still
-    # update the authenticated user's profile (previously they were dropped —
-    # ~half of all telemetry).
-    try:
-        clip = db.table("clips").select("topic_slug, embedding, duration_seconds").eq("id", clip_id).limit(1).execute()
-    except Exception as e:
-        logger.warning(f"[feed] Failed to fetch clip {clip_id} for event: {e}")
-        return
-    if not clip.data:
-        return
-
+    # Authorize the session BEFORE writing anything. A caller may only record
+    # events against a session they own; otherwise a forged session_id could be
+    # used to pollute another user's telemetry. Resolve the effective user_id
+    # here too (session owner for session events, else the caller).
     user_id = caller_id
     if event.session_id:
         try:
@@ -416,8 +390,38 @@ async def record_clip_event(request: Request, clip_id: str, event: ClipEvent, ca
             owner = None
         if owner and owner != caller_id:
             logger.warning(f"[feed] session ownership mismatch: caller={caller_id} session_owner={owner}")
-            return
+            raise HTTPException(status_code=403, detail="Access denied")
         user_id = owner or caller_id
+
+    base_row = {
+        "clip_id": clip_id,
+        "session_id": event.session_id,
+        "watch_ms": event.watch_ms,
+        "completed": event.completed,
+        "replay_count": event.replay_count,
+    }
+    try:
+        # Persist feedback (fire/check) so it survives as history, not just as a
+        # live vector nudge. Falls back to core columns if the `feedback` column
+        # hasn't been migrated yet, so telemetry is never lost.
+        db.table("clip_events").insert({**base_row, "feedback": event.feedback}).execute()
+    except Exception:
+        try:
+            db.table("clip_events").insert(base_row).execute()
+        except Exception as e:
+            logger.warning(f"Failed to record event for clip {clip_id}: {e}")
+            return
+
+    # Personalize on every event. Session-feed events update both session- and
+    # user-level vectors; topic-feed/discover events have no session but still
+    # update the authenticated user's profile.
+    try:
+        clip = db.table("clips").select("topic_slug, embedding, duration_seconds").eq("id", clip_id).limit(1).execute()
+    except Exception as e:
+        logger.warning(f"[feed] Failed to fetch clip {clip_id} for event: {e}")
+        return
+    if not clip.data:
+        return
 
     _update_interest_vector(
         db, event.session_id, clip.data[0]["topic_slug"],

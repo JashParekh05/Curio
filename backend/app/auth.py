@@ -26,10 +26,13 @@ def require_user(authorization: Annotated[str | None, Header()] = None) -> str:
     token = authorization.removeprefix("Bearer ").strip()
     try:
         signing_key = _get_jwks_client().get_signing_key_from_jwt(token)
+        # Only asymmetric algorithms — we verify against Supabase's JWKS public
+        # keys. Allowing HS256 here would enable an algorithm-confusion attack
+        # (forge an HS256 token using the public key bytes as the HMAC secret).
         payload = jwt.decode(
             token,
             signing_key.key,
-            algorithms=["ES256", "RS256", "HS256"],  # accept all Supabase-supported algs
+            algorithms=["ES256", "RS256"],
             options={"verify_aud": True},
             audience="authenticated",
         )
