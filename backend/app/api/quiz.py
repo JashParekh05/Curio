@@ -1,15 +1,19 @@
 import asyncio
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.auth import require_user
 from app.db.supabase import get_client
-from app.services.quiz import grade, points_for, summarize_mastery
+from app.services.quiz import generate_and_store_questions, grade, points_for, summarize_mastery
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/quiz", tags=["quiz"])
+
+# Topics currently self-healing a quiz in the background, so concurrent GETs
+# don't kick off duplicate generations. Best-effort de-dupe within one process.
+_quiz_generating: set[str] = set()
 
 
 class QuizAnswer(BaseModel):
@@ -33,6 +37,53 @@ def _topic_questions(topic_slug: str) -> list[dict]:
     return res.data or []
 
 
+def _topic_has_clips(topic_slug: str) -> bool:
+    """True when the topic has at least one clip (i.e. it's worth quizzing)."""
+    db = get_client()
+    try:
+        res = db.table("clips").select("id").eq("topic_slug", topic_slug).limit(1).execute()
+        return bool(res.data)
+    except Exception as e:
+        logger.warning(f"[quiz] failed clip check for '{topic_slug}': {e}")
+        return False
+
+
+def _topic_name(topic_slug: str) -> str:
+    """Human-readable topic name, falling back to a slug-derived title."""
+    db = get_client()
+    try:
+        res = db.table("topics").select("name").eq("slug", topic_slug).limit(1).execute()
+        if res.data and res.data[0].get("name"):
+            return res.data[0]["name"]
+    except Exception as e:
+        logger.warning(f"[quiz] failed name lookup for '{topic_slug}': {e}")
+    return topic_slug.replace("-", " ").title()
+
+
+def _bg_generate_quiz(topic_slug: str) -> None:
+    """Background self-heal: generate+store a quiz for a topic that has clips
+    but no cached questions, then release the in-flight guard. Best-effort."""
+    try:
+        name = _topic_name(topic_slug)
+        generate_and_store_questions(topic_slug, name)
+    except Exception as e:
+        logger.warning(f"[quiz] self-heal generation failed for '{topic_slug}': {e}")
+    finally:
+        _quiz_generating.discard(topic_slug)
+
+
+def _maybe_self_heal(topic_slug: str, background_tasks: BackgroundTasks) -> None:
+    """If a topic has clips but no quiz yet, kick off generation in the
+    background so the quiz appears automatically on a later poll/open. Guarded
+    so only one generation runs per topic at a time."""
+    if topic_slug in _quiz_generating:
+        return
+    if not _topic_has_clips(topic_slug):
+        return
+    _quiz_generating.add(topic_slug)
+    background_tasks.add_task(_bg_generate_quiz, topic_slug)
+
+
 @router.get("/mastery/{user_id}")
 async def get_mastery(user_id: str, caller_id: str = Depends(require_user)):
     """Per-topic mastery summary + total points for the panel header/pips."""
@@ -49,10 +100,15 @@ async def get_mastery(user_id: str, caller_id: str = Depends(require_user)):
 
 
 @router.get("/{topic_slug}")
-async def get_quiz(topic_slug: str, caller_id: str = Depends(require_user)):
+async def get_quiz(topic_slug: str, background_tasks: BackgroundTasks, caller_id: str = Depends(require_user)):
     """Cached MCQs for a topic, including correct_index + explanation so the
-    client can grade and reveal instantly. Empty list when none generated yet."""
-    return await asyncio.to_thread(_topic_questions, topic_slug)
+    client can grade and reveal instantly. When none exist yet but the topic
+    has clips, kick off generation in the background (lazy self-heal) so the
+    quiz shows up automatically on a later poll. Empty list in the meantime."""
+    questions = await asyncio.to_thread(_topic_questions, topic_slug)
+    if not questions:
+        await asyncio.to_thread(_maybe_self_heal, topic_slug, background_tasks)
+    return questions
 
 
 @router.post("/{question_id}/answer", status_code=204)

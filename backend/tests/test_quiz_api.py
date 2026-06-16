@@ -2,7 +2,7 @@
 import asyncio
 
 import pytest
-from fastapi import HTTPException
+from fastapi import BackgroundTasks, HTTPException
 
 import app.api.quiz as quiz_api
 from app.api.quiz import get_quiz, get_mastery, answer_question, QuizAnswer
@@ -26,16 +26,49 @@ def _question(qid="q1", correct_index=0):
 class TestGetQuiz:
     def test_returns_questions_with_answers(self, monkeypatch):
         _patch_db(monkeypatch, {"quiz_questions": [_question()]})
-        out = asyncio.run(get_quiz("t", caller_id="u"))
+        out = asyncio.run(get_quiz("t", BackgroundTasks(), caller_id="u"))
         assert len(out) == 1 and out[0]["correct_index"] == 0 and out[0]["explanation"] == "why"
 
     def test_empty_when_none(self, monkeypatch):
         _patch_db(monkeypatch, {"quiz_questions": []})
-        assert asyncio.run(get_quiz("t", caller_id="u")) == []
+        assert asyncio.run(get_quiz("t", BackgroundTasks(), caller_id="u")) == []
 
     def test_db_failure_returns_empty(self, monkeypatch):
         _patch_db(monkeypatch, {"quiz_questions": [_question()]}, fail={"quiz_questions"})
-        assert asyncio.run(get_quiz("t", caller_id="u")) == []
+        assert asyncio.run(get_quiz("t", BackgroundTasks(), caller_id="u")) == []
+
+
+class TestSelfHeal:
+    def setup_method(self):
+        quiz_api._quiz_generating.clear()
+
+    def test_schedules_generation_when_empty_and_has_clips(self, monkeypatch):
+        _patch_db(monkeypatch, {"quiz_questions": [], "clips": [{"id": "c1", "topic_slug": "t"}]})
+        bg = BackgroundTasks()
+        out = asyncio.run(get_quiz("t", bg, caller_id="u"))
+        assert out == []
+        assert len(bg.tasks) == 1
+        assert "t" in quiz_api._quiz_generating
+
+    def test_no_generation_when_no_clips(self, monkeypatch):
+        _patch_db(monkeypatch, {"quiz_questions": [], "clips": []})
+        bg = BackgroundTasks()
+        asyncio.run(get_quiz("t", bg, caller_id="u"))
+        assert bg.tasks == []
+        assert "t" not in quiz_api._quiz_generating
+
+    def test_no_generation_when_questions_exist(self, monkeypatch):
+        _patch_db(monkeypatch, {"quiz_questions": [_question()], "clips": [{"id": "c1", "topic_slug": "t"}]})
+        bg = BackgroundTasks()
+        asyncio.run(get_quiz("t", bg, caller_id="u"))
+        assert bg.tasks == []
+
+    def test_no_duplicate_generation_when_in_flight(self, monkeypatch):
+        _patch_db(monkeypatch, {"quiz_questions": [], "clips": [{"id": "c1", "topic_slug": "t"}]})
+        quiz_api._quiz_generating.add("t")
+        bg = BackgroundTasks()
+        asyncio.run(get_quiz("t", bg, caller_id="u"))
+        assert bg.tasks == []
 
 
 class TestAnswerQuestion:
