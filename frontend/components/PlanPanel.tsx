@@ -67,6 +67,42 @@ export default function PlanPanel({
     getQuizMastery(user.id, token).then(setMastery).catch(() => {});
   }, [open, user, token]);
 
+  // Light self-heal poll: when a topic is expanded but its quiz is still empty,
+  // the server generates one lazily in the background. Re-fetch a few times so
+  // the quiz appears without the user having to collapse/re-expand. Stops as
+  // soon as questions arrive or after a bounded number of attempts.
+  useEffect(() => {
+    if (!open || !expanded || !token) return;
+    const slug = expanded;
+    if (loading === slug) return;
+    if ((quizzes[slug]?.length ?? 0) > 0) return;
+
+    let cancelled = false;
+    let attempts = 0;
+    const MAX_ATTEMPTS = 6;
+    const INTERVAL_MS = 5000;
+
+    const timer = setInterval(async () => {
+      if (cancelled) return;
+      attempts += 1;
+      try {
+        const qs = await getQuiz(slug, token);
+        if (!cancelled && qs.length > 0) {
+          setQuizzes((p) => ({ ...p, [slug]: qs }));
+          clearInterval(timer);
+        }
+      } catch {
+        /* best-effort; keep trying until the attempt cap */
+      }
+      if (attempts >= MAX_ATTEMPTS) clearInterval(timer);
+    }, INTERVAL_MS);
+
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [open, expanded, token, quizzes, loading]);
+
   async function toggle(slug: string) {
     if (expanded === slug) {
       setExpanded(null);
@@ -213,7 +249,7 @@ export default function PlanPanel({
                       <>
                         <p className="px-4 pt-3 pb-1 text-ink/50 text-[10px] font-black tracking-wide">TEST YOURSELF</p>
                         {qs.length === 0 ? (
-                          <div className="px-4 pb-3 text-ink/50 text-xs font-medium">Quiz coming soon.</div>
+                          <div className="px-4 pb-3 text-ink/50 text-xs font-medium">Building your quiz...</div>
                         ) : (
                           <div className="px-4 pb-3 space-y-3">
                             {qs.map((q) => {
