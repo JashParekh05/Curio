@@ -22,6 +22,7 @@ from app.services.discover_seeding import (
     _GRADE_DIFFICULTY,
 )
 from app.services.path_extension import _should_extend, _extend_path, _LOW_CLIPS_THRESHOLD
+from app.services import self_heal_state
 from app.services.topic_expansion import (
     _is_expansion_candidate,
     _should_expand_topic,
@@ -157,7 +158,9 @@ async def get_path_feed(session_id: str, background_tasks: BackgroundTasks, call
         # have a few clips while more are still on the way; reporting it done too
         # early makes the frontend stop polling and the user gets stuck.
         is_generating = slug in generating_slugs
-        if not clips and not is_generating:
+        attempts, last_age = self_heal_state.read(slug)
+        has_clips = bool(clips)
+        if self_heal_state.should_self_heal(has_clips, is_generating, attempts, last_age):
             missing_slugs.append(slug)
 
         # Endless expansion: an engaged viewer running low on unseen clips for
@@ -168,10 +171,12 @@ async def get_path_feed(session_id: str, background_tasks: BackgroundTasks, call
                 and _should_expand_topic(session_id, slug)):
             expand_slugs.append(slug)
 
+        failed = self_heal_state.is_terminal_failed(has_clips, is_generating, attempts)
         feeds.append(FeedResponse(
             topic_slug=slug,
             clips=clips,
-            processing=is_generating or len(clips) == 0,
+            processing=is_generating or (not has_clips and not failed),
+            failed=failed,
         ))
 
     # Self-heal: if a topic has no clips and nothing is generating it (e.g. the
@@ -217,7 +222,7 @@ async def get_path_feed(session_id: str, background_tasks: BackgroundTasks, call
             if c.id not in seen_clip_ids:
                 seen_clip_ids.add(c.id)
                 unique.append(c)
-        deduped_feeds.append(FeedResponse(topic_slug=f.topic_slug, clips=unique, processing=f.processing))
+        deduped_feeds.append(FeedResponse(topic_slug=f.topic_slug, clips=unique, processing=f.processing, failed=f.failed))
 
     # Auto-extend the path when user is running low on unseen clips.
     # Skip if any topic is still processing — pipelines may still deliver clips.

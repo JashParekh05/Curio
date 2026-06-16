@@ -75,6 +75,16 @@ function FeedContent() {
         });
         setTopicLabels((prev) => ({ ...prev, ...labels }));
         setProcessing(feeds.some((f) => f.processing));
+        // Terminal-empty short-circuit: when every topic is out of its
+        // self-heal budget (failed) or finished empty, and no clips exist at
+        // all, stop polling and show the "No clips found" screen immediately
+        // instead of waiting for the 5-minute timeout.
+        const allTerminal = feeds.length > 0 && feeds.every((f) => f.failed || (!f.processing && f.clips.length === 0));
+        if (allClips.length === 0 && allTerminal) {
+          clearInterval(pollingRef.current);
+          setProcessing(false);
+          setTimedOut(true);
+        }
         setLoadError(false);
       } else if (topicSlug) {
         const feed = await getTopicFeed(topicSlug, session?.access_token ?? "");

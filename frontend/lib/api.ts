@@ -44,6 +44,7 @@ export interface FeedResponse {
   topic_slug: string;
   clips: Clip[];
   processing: boolean;
+  failed?: boolean;
 }
 
 function authHeaders(token: string): Record<string, string> {

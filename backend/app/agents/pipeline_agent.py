@@ -229,6 +229,10 @@ def _node_segment(state: PipelineState) -> dict:
         if v.get("transcript"):
             try:
                 segments = _identify_segments(v["transcript"], topic_slug, section_context)
+            except Exception as exc:
+                logger.warning(f"[pipeline_agent] segment failed {vid_id}: {exc}")
+                segments = []
+            if segments:
                 for seg in segments:
                     clips.append({
                         **base,
@@ -239,8 +243,10 @@ def _node_segment(state: PipelineState) -> dict:
                         "transcript": seg.get("transcript"),
                         "hook_score": seg.get("hook_score", 0.5),
                     })
-            except Exception as exc:
-                logger.warning(f"[pipeline_agent] segment failed {vid_id}: {exc}")
+            else:
+                # Graceful fallback: a transient empty segmentation (LLM error /
+                # unparseable JSON) must still yield the base clip, not zero.
+                logger.warning(f"[pipeline_agent] segmentation empty for {vid_id}; using base clip")
                 clips.append(base)
         else:
             clips.append(base)

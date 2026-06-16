@@ -5,6 +5,7 @@ from app.models.schemas import TopicRequest, LearningPath
 from app.db.supabase import get_client
 from app.auth import require_user
 from app.rate_limit import limiter
+from app.services import self_heal_state
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/topics", tags=["topics"])
@@ -20,6 +21,10 @@ async def _process_single_topic(slug: str, name: str) -> None:
     from app.agents.section_planner import plan_and_store_sections
 
     generating_slugs.add(slug)
+    # Total clips stored across the whole run. Initialized before the try so it
+    # is in scope in the finally even if an exception aborts the run mid-way (a
+    # run that stored 0 clips must record a failed self-heal attempt).
+    total_stored = 0
     try:
         try:
             sections = await asyncio.to_thread(plan_and_store_sections, slug, name)
@@ -31,7 +36,7 @@ async def _process_single_topic(slug: str, name: str) -> None:
             arc_titles = [s.get("title", "") for s in sections]
             for i, section in enumerate(sections):
                 try:
-                    await asyncio.to_thread(
+                    stored = await asyncio.to_thread(
                         run_pipeline,
                         slug,
                         name,
@@ -42,6 +47,7 @@ async def _process_single_topic(slug: str, name: str) -> None:
                         section.get("description"),
                         arc_titles,
                     )
+                    total_stored += stored or 0
                 except Exception as e:
                     logger.error(f"[topics] Pipeline failed for {slug} section {section['section_index']}: {e}")
             # All beats generated — score + order the full sequence as one story.
@@ -58,11 +64,23 @@ async def _process_single_topic(slug: str, name: str) -> None:
                 logger.error(f"[topics] Quiz generation failed for topic={slug}: {e}")
         else:
             try:
-                await asyncio.to_thread(run_pipeline, slug, name)
+                stored = await asyncio.to_thread(run_pipeline, slug, name)
+                total_stored += stored or 0
             except Exception as e:
                 logger.error(f"[topics] Background pipeline failed for topic={slug}: {e}")
     finally:
         generating_slugs.discard(slug)
+        # Record the attempt outcome so the retry budget survives the
+        # generating_slugs lifecycle: a successful run (>=1 clip stored) clears
+        # tracking, an empty run records a failed attempt toward the cap. Covers
+        # both the initial POST path and the self-heal path in one place.
+        try:
+            if total_stored >= 1:
+                self_heal_state.clear(slug)
+            else:
+                self_heal_state.record_attempt(slug)
+        except Exception as e:
+            logger.warning(f"[topics] Failed to record self-heal outcome for {slug}: {e}")
 
 
 async def _process_topics_parallel(topics: list[tuple[str, str]]) -> None:

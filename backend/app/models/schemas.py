@@ -71,6 +71,7 @@ class FeedResponse(BaseModel):
     topic_slug: str
     clips: list[Clip]
     processing: bool = False
+    failed: bool = False  # terminal: out of retry budget and still empty
 
 
 class TopicRecommendation(BaseModel):

@@ -174,6 +174,7 @@ def _interleave_topics(feeds: list[FeedResponse]) -> list[FeedResponse]:
             topic_slug=f.topic_slug,
             clips=result.get(f.topic_slug, f.clips),
             processing=f.processing,
+            failed=f.failed,
         )
         for f in feeds
     ]
