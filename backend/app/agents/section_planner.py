@@ -21,7 +21,91 @@ import json
 import logging
 import os
 
+from app.models.schemas import ArcRole, ConceptType, PedagogicalRole, PlannedArc
+
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Pedagogical arc templates (Req 1.2, 1.4, 1.5)
+# ---------------------------------------------------------------------------
+
+PROBLEM_SOLVING_TEMPLATE: list[PedagogicalRole] = [
+    "problem_statement",
+    "meaning",
+    "visualization",
+    "approach",
+    "worked_example",
+    "edge_cases",
+]
+
+CONCEPTUAL_TEMPLATE: list[PedagogicalRole] = [
+    "definition",
+    "motivation",
+    "mechanism",
+    "example",
+    "common_misconception",
+]
+
+DEFAULT_TEMPLATE: list[PedagogicalRole] = [
+    "definition",
+    "motivation",
+    "mechanism",
+    "example",
+]
+
+_TEMPLATE_MAP: dict[str, list[PedagogicalRole]] = {
+    "problem_solving": PROBLEM_SOLVING_TEMPLATE,
+    "conceptual": CONCEPTUAL_TEMPLATE,
+    "default": DEFAULT_TEMPLATE,
+}
+
+
+# ---------------------------------------------------------------------------
+# Pure helpers — no I/O, fully unit-testable (Req 8.4)
+# ---------------------------------------------------------------------------
+
+def select_template(concept_type: ConceptType) -> list[PedagogicalRole]:
+    """Return the ordered role list for *concept_type*.
+
+    Total function over the supported ConceptType values; any unrecognised or
+    DEFAULT value maps to DEFAULT_TEMPLATE.  (Req 1.2, 1.4, 1.5, 1.7)
+    """
+    return _TEMPLATE_MAP.get(concept_type, DEFAULT_TEMPLATE)
+
+
+def build_planned_arc(
+    topic_slug: str,
+    concept_type: ConceptType,
+    template: list[PedagogicalRole],
+    default_applied: bool = False,
+) -> PlannedArc:
+    """Instantiate a PlannedArc from *template*.
+
+    - Each role is tagged with a consecutive ordinal starting at 1, in template
+      order, with no added, omitted, or duplicated roles.
+    - An empty template yields a PlannedArc with ``template_empty=True`` and
+      ``roles=[]``.  (Req 1.3, 1.6, 1.8)
+    """
+    if not template:
+        return PlannedArc(
+            topic_slug=topic_slug,
+            concept_type=concept_type,
+            default_applied=default_applied,
+            template_empty=True,
+            roles=[],
+        )
+
+    roles = [
+        ArcRole(role=role, ordinal=ordinal)
+        for ordinal, role in enumerate(template, start=1)
+    ]
+    return PlannedArc(
+        topic_slug=topic_slug,
+        concept_type=concept_type,
+        default_applied=default_applied,
+        template_empty=False,
+        roles=roles,
+    )
 
 MODEL = "gpt-4o-mini"
 MAX_REVISIONS = 2          # judge/revise rounds before accepting the plan as-is
@@ -389,3 +473,153 @@ def plan_extension_sections(topic_name: str, existing_titles: list[str],
             "search_query": str(a.get("search_query") or f"{topic_name} {title}").strip(),
         })
     return out
+
+
+# ---------------------------------------------------------------------------
+# Classification + arc persistence  (Req 1.1, 1.7)
+# ---------------------------------------------------------------------------
+
+_SUPPORTED_CONCEPT_TYPES: frozenset[str] = frozenset({"problem_solving", "conceptual", "default"})
+
+
+def classify_concept_type(
+    topic_name: str,
+    difficulty: str,
+) -> tuple[ConceptType, bool]:
+    """Best-effort LLM classification of *topic_name* into a supported ConceptType.
+
+    Returns ``(concept_type, default_applied)`` where ``default_applied`` is
+    ``True`` whenever the raw model output is missing, unparseable, or not a
+    supported value — in which case ``concept_type`` is ``"default"``.
+
+    Any exception (network error, missing API key, quota, …) is caught and
+    treated the same way: ``("default", True)``.  (Req 1.1, 1.7)
+    """
+    prompt = (
+        f'Classify the topic "{topic_name}" (difficulty: {difficulty}) as one of the '
+        f'following learning concept types:\n'
+        f'- "problem_solving": topic is primarily about solving a well-defined problem '
+        f'or algorithm (e.g. sorting, dynamic programming, debugging).\n'
+        f'- "conceptual": topic is primarily about understanding a concept, theory, or '
+        f'idea (e.g. recursion, machine learning, OOP).\n'
+        f'- "default": neither of the above fits well.\n\n'
+        f'Respond with ONLY the single string value — one of: '
+        f'"problem_solving", "conceptual", or "default". No punctuation, no explanation.'
+    )
+    try:
+        resp = _client().chat.completions.create(
+            model=MODEL,
+            max_tokens=20,
+            temperature=0,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = (resp.choices[0].message.content or "").strip().strip('"').lower()
+        if raw in _SUPPORTED_CONCEPT_TYPES:
+            concept_type: ConceptType = raw  # type: ignore[assignment]
+            return concept_type, False
+        # Unsupported value → fall through to default
+        logger.warning(
+            f"[section_planner] classify_concept_type got unsupported value '{raw}' "
+            f"for '{topic_name}'; using default"
+        )
+    except Exception as exc:
+        logger.warning(
+            f"[section_planner] classify_concept_type failed for '{topic_name}': {exc}; "
+            f"using default"
+        )
+    return "default", True
+
+
+def plan_and_store_arc(
+    topic_slug: str,
+    topic_name: str,
+    difficulty: str = "intermediate",
+    db=None,
+) -> PlannedArc:
+    """Classify → select_template → build_planned_arc → persist to Supabase.
+
+    Cached: if rows already exist in ``topic_arcs`` for *topic_slug*, the
+    stored arc is returned without calling the LLM.  Mirrors the caching
+    pattern of ``plan_and_store_sections``.  (Req 1.1, 1.7)
+    """
+    if db is None:
+        from app.db.supabase import get_client
+        db = get_client()
+
+    # ---- cache check -------------------------------------------------------
+    existing_arc = (
+        db.table("topic_arcs")
+        .select("concept_type,default_applied,template_empty")
+        .eq("topic_slug", topic_slug)
+        .limit(1)
+        .execute()
+    )
+    if existing_arc.data:
+        row = existing_arc.data[0]
+        existing_roles = (
+            db.table("topic_arc_roles")
+            .select("role,ordinal")
+            .eq("topic_slug", topic_slug)
+            .order("ordinal")
+            .execute()
+        )
+        arc_roles = [
+            ArcRole(role=r["role"], ordinal=r["ordinal"])
+            for r in (existing_roles.data or [])
+        ]
+        return PlannedArc(
+            topic_slug=topic_slug,
+            concept_type=row["concept_type"],
+            default_applied=row["default_applied"],
+            template_empty=row["template_empty"],
+            roles=arc_roles,
+        )
+
+    # ---- classify → build arc ----------------------------------------------
+    concept_type, default_applied = classify_concept_type(topic_name, difficulty)
+    template = select_template(concept_type)
+    arc = build_planned_arc(
+        topic_slug=topic_slug,
+        concept_type=concept_type,
+        template=template,
+        default_applied=default_applied,
+    )
+
+    # ---- persist ------------------------------------------------------------
+    try:
+        db.table("topic_arcs").upsert(
+            {
+                "topic_slug": topic_slug,
+                "concept_type": arc.concept_type,
+                "default_applied": arc.default_applied,
+                "template_empty": arc.template_empty,
+            },
+            on_conflict="topic_slug",
+        ).execute()
+    except Exception as exc:
+        logger.warning(
+            f"[section_planner] Failed to upsert topic_arcs for {topic_slug}: {exc}"
+        )
+
+    for arc_role in arc.roles:
+        try:
+            db.table("topic_arc_roles").upsert(
+                {
+                    "topic_slug": topic_slug,
+                    "role": arc_role.role,
+                    "ordinal": arc_role.ordinal,
+                },
+                on_conflict="topic_slug,ordinal",
+            ).execute()
+        except Exception as exc:
+            logger.warning(
+                f"[section_planner] Failed to upsert topic_arc_roles "
+                f"(ordinal {arc_role.ordinal}) for {topic_slug}: {exc}"
+            )
+
+    logger.info(
+        f"[section_planner] arc stored for {topic_slug}: "
+        f"type={arc.concept_type} default_applied={arc.default_applied} "
+        f"roles={len(arc.roles)}"
+    )
+    return arc

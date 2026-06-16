@@ -2,8 +2,10 @@ import os
 import re
 import json
 import logging
+from typing import get_args
 from openai import OpenAI
 from app.services.embeddings import embed_texts
+from app.models.schemas import LearningAtom, PedagogicalRole, PlannedArc
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -17,6 +19,300 @@ def _get_client():
     if _openai_client is None:
         _openai_client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
     return _openai_client
+
+
+_VALID_ROLES: frozenset[str] = frozenset(get_args(PedagogicalRole))
+
+_ATOM_MIN_DURATION = 3.0   # seconds (Req 2.1)
+_ATOM_MAX_DURATION = 90.0  # seconds (Req 2.1)
+_CONCEPT_MAX_LEN = 200     # chars (Req 2.3)
+_PRIOR_KNOWLEDGE_MAX = 50  # items (Req 2.4)
+
+
+def validate_atom(
+    raw: dict, transcript_duration: float
+) -> tuple["LearningAtom | None", "str | None"]:
+    """Validate and normalise one candidate atom dict.
+
+    Returns ``(atom, None)`` when the candidate is valid, or ``(None, reason)``
+    where *reason* names the specific missing/invalid label so the caller can
+    log and exclude the candidate without dropping valid sibling atoms.
+
+    Enforced rules (Requirements 2.1–2.5, 2.7, 7.1):
+    - Exactly one defined ``PedagogicalRole`` value in the ``role`` field.
+    - ``concept`` is non-empty with 1–200 characters.
+    - ``prior_knowledge`` is a list/set of 0–50 distinct concepts, none equal
+      to the covered concept.
+    - ``start >= 0``, ``end > start``, ``end <= transcript_duration``.
+    - Duration (``end - start``) is between 3 and 90 seconds inclusive.
+    """
+    # --- role ---
+    role = raw.get("role")
+    if not isinstance(role, str) or role not in _VALID_ROLES:
+        return None, f"invalid role: {role!r}"
+
+    # --- concept ---
+    concept = raw.get("concept")
+    if not isinstance(concept, str) or not concept:
+        return None, "missing concept label"
+    concept = concept.strip()
+    if not concept:
+        return None, "concept label is blank"
+    if len(concept) > _CONCEPT_MAX_LEN:
+        return None, f"concept label exceeds {_CONCEPT_MAX_LEN} characters"
+
+    # --- prior_knowledge ---
+    raw_pk = raw.get("prior_knowledge", [])
+    if not isinstance(raw_pk, (list, set, tuple)):
+        return None, "prior_knowledge must be a list"
+    # Normalise to deduplicated list of stripped non-empty strings
+    seen: set[str] = set()
+    prior_knowledge: list[str] = []
+    for item in raw_pk:
+        if not isinstance(item, str):
+            return None, f"prior_knowledge item is not a string: {item!r}"
+        item = item.strip()
+        if not item:
+            return None, "prior_knowledge contains a blank concept"
+        if item in seen:
+            continue  # silently deduplicate
+        seen.add(item)
+        prior_knowledge.append(item)
+
+    if len(prior_knowledge) > _PRIOR_KNOWLEDGE_MAX:
+        return None, f"prior_knowledge exceeds {_PRIOR_KNOWLEDGE_MAX} distinct concepts"
+    if concept in seen:
+        return None, "prior_knowledge contains the covered concept"
+
+    # --- timestamps ---
+    try:
+        start = float(raw["start"])
+        end = float(raw["end"])
+    except (KeyError, TypeError, ValueError):
+        return None, "start/end timestamps missing or non-numeric"
+
+    if start < 0:
+        return None, f"start timestamp is negative: {start}"
+    if end <= start:
+        return None, f"end ({end}) must be greater than start ({start})"
+    if end > transcript_duration:
+        return None, (
+            f"end ({end}) exceeds transcript duration ({transcript_duration})"
+        )
+
+    duration = end - start
+    if duration < _ATOM_MIN_DURATION:
+        return None, (
+            f"duration {duration:.3f}s is below minimum {_ATOM_MIN_DURATION}s"
+        )
+    if duration > _ATOM_MAX_DURATION:
+        return None, (
+            f"duration {duration:.3f}s exceeds maximum {_ATOM_MAX_DURATION}s"
+        )
+
+    # --- build atom ---
+    try:
+        atom = LearningAtom(
+            id=str(raw.get("id", "")),
+            topic_slug=str(raw.get("topic_slug", "")),
+            video_id=str(raw.get("video_id", "")),
+            source_url=str(raw.get("source_url", "")),
+            role=role,  # type: ignore[arg-type]
+            concept=concept,
+            prior_knowledge=prior_knowledge,
+            start=start,
+            end=end,
+            transcript=raw.get("transcript"),
+        )
+    except Exception as exc:
+        return None, f"model validation error: {exc}"
+
+    return atom, None
+
+
+def order_atoms(atoms: list[LearningAtom]) -> list[LearningAtom]:
+    """Sort atoms by ascending start timestamp and resolve overlaps.
+
+    When two atoms overlap in time, the earlier-starting atom is kept intact
+    and the later one is either trimmed (its start is advanced to the earlier
+    atom's end) or dropped if trimming would violate the minimum duration
+    constraint (``_ATOM_MIN_DURATION``).
+
+    This is a **pure function**: the input list and individual atoms are never
+    mutated.  A new list of new ``LearningAtom`` instances is returned.
+
+    Requirements: 2.6
+    """
+    # Sort by start timestamp (ascending), breaking ties by end timestamp.
+    sorted_atoms = sorted(atoms, key=lambda a: (a.start, a.end))
+
+    result: list[LearningAtom] = []
+    # Track the furthest end timestamp seen so far to detect overlaps.
+    timeline_end: float = -1.0
+
+    for atom in sorted_atoms:
+        if atom.start >= timeline_end:
+            # No overlap — include as-is.
+            result.append(atom)
+            timeline_end = atom.end
+        else:
+            # Overlap: the current atom's start is before the previous atom's
+            # end.  Attempt to trim by advancing the start to timeline_end.
+            new_start = timeline_end
+            new_duration = atom.end - new_start
+            if new_duration < _ATOM_MIN_DURATION:
+                # Trimmed atom would be too short — drop it entirely.
+                continue
+            # Produce a trimmed copy without mutating the original.
+            trimmed = atom.model_copy(update={"start": new_start})
+            result.append(trimmed)
+            timeline_end = trimmed.end
+
+    return result
+
+
+def segment_into_atoms(
+    transcript: list[dict],
+    topic_slug: str,
+    planned_arc: PlannedArc,
+) -> list[LearningAtom]:
+    """LLM shell: prompt gpt-4o-mini to cut the transcript into single-idea
+    atoms, each labeled with role, concept, prior_knowledge (list of strings),
+    start, and end (in seconds).
+
+    For every candidate returned by the model, call ``validate_atom``; excluded
+    candidates are logged together with the specific rejection reason so the
+    caller can trace what was discarded.  Survivors are passed to
+    ``order_atoms`` and returned.
+
+    Best-effort (Req 7.1): if the model call or JSON parse fails, the function
+    returns an empty list and logs a warning that names *topic_slug*, leaving
+    any previously recorded data unchanged.
+
+    Requirements: 2.1-2.7, 7.1
+    """
+    if not transcript:
+        logger.warning(
+            "[pipeline] segment_into_atoms: empty transcript for topic=%s, returning []",
+            topic_slug,
+        )
+        return []
+
+    # Derive total duration from the last transcript segment.
+    last = transcript[-1]
+    transcript_duration: float = float(last["start"]) + float(last["duration"])
+
+    # Build a compact view of the transcript for the prompt (cap at 300 entries
+    # to mirror _identify_segments and keep the context window manageable).
+    segments_with_times = [
+        {
+            "start": s["start"],
+            "end": round(s["start"] + s["duration"], 3),
+            "text": s["text"],
+        }
+        for s in transcript
+    ]
+    transcript_json = json.dumps(segments_with_times[:300], indent=2)
+
+    # Enumerate the planned roles so the model knows which labels to use.
+    planned_roles = [arc_role.role for arc_role in planned_arc.roles]
+    roles_block = (
+        "The planned pedagogical arc for this topic defines these roles (in order):\n"
+        + "\n".join(f"  - {r}" for r in planned_roles)
+        if planned_roles
+        else "Use any valid pedagogical role from the defined set."
+    )
+
+    valid_roles_list = ", ".join(sorted(_VALID_ROLES))
+    prompt = f"""You are an educational content analyst. Your task is to cut a YouTube transcript about "{topic_slug}" into fine-grained single-idea atoms for a pedagogical learning arc.
+
+{roles_block}
+
+Valid role values (use EXACTLY one of these): {valid_roles_list}
+
+Rules for each atom:
+- Cover exactly ONE clear idea or concept claim.
+- Duration must be between 3 and 90 seconds (end - start).
+- "concept": a non-empty text label of 1-200 characters describing what the atom teaches.
+- "prior_knowledge": a JSON array of 0-50 distinct concept strings the viewer must already know (none may equal the atom's own "concept").
+- "start" and "end": float seconds, matching positions in the transcript.
+
+Here is the transcript with timestamps:
+{transcript_json}
+
+Return a JSON array only — no markdown, no extra text:
+[
+  {{
+    "role": "definition",
+    "concept": "binary search",
+    "prior_knowledge": ["arrays", "sorted order"],
+    "start": 4.2,
+    "end": 18.7
+  }}
+]"""
+
+    client = _get_client()
+    try:
+        response = client.chat.completions.create(
+            model=MODEL,
+            max_tokens=4096,
+            messages=[{"role": "user", "content": prompt}],
+        )
+    except Exception as exc:
+        logger.warning(
+            "[pipeline] segment_into_atoms: model call failed for topic=%s: %s",
+            topic_slug,
+            exc,
+        )
+        return []
+
+    raw = response.choices[0].message.content.strip()
+    # Strip markdown code fences if present (mirrors _identify_segments).
+    if "```" in raw:
+        raw = raw.split("```")[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+
+    try:
+        candidates: list[dict] = json.loads(raw.strip())
+    except json.JSONDecodeError as exc:
+        logger.warning(
+            "[pipeline] segment_into_atoms: JSON parse failed for topic=%s: %s | raw=%s",
+            topic_slug,
+            exc,
+            raw[:200],
+        )
+        return []
+
+    if not isinstance(candidates, list):
+        logger.warning(
+            "[pipeline] segment_into_atoms: model returned non-list JSON for topic=%s",
+            topic_slug,
+        )
+        return []
+
+    # Validate each candidate; log and exclude invalid ones.
+    valid_atoms: list[LearningAtom] = []
+    for idx, candidate in enumerate(candidates):
+        # Inject context fields the validator reads from the dict but the
+        # model does not produce (id, topic_slug, video_id, source_url).
+        candidate.setdefault("id", "")
+        candidate.setdefault("topic_slug", topic_slug)
+        candidate.setdefault("video_id", "")
+        candidate.setdefault("source_url", "")
+
+        atom, reason = validate_atom(candidate, transcript_duration)
+        if atom is None:
+            logger.info(
+                "[pipeline] segment_into_atoms: excluded candidate %d for topic=%s — %s",
+                idx,
+                topic_slug,
+                reason,
+            )
+        else:
+            valid_atoms.append(atom)
+
+    return order_atoms(valid_atoms)
 
 
 def process_video(video_url: str, topic_slug: str) -> list[dict]:

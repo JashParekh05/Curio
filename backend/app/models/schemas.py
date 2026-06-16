@@ -3,6 +3,22 @@ from pydantic import BaseModel, Field, field_validator
 from typing import Literal
 
 
+ConceptType = Literal["problem_solving", "conceptual", "default"]
+
+PedagogicalRole = Literal[
+    # problem-solving arc
+    "problem_statement", "meaning", "visualization", "approach",
+    "worked_example", "edge_cases",
+    # conceptual arc
+    "definition", "motivation", "mechanism", "example", "common_misconception",
+]
+
+DefectType = Literal[
+    "prerequisite_gap", "conceptual_jump", "contradiction",
+    "redundancy", "unfilled_role", "circular_dependency", "missing_piece",
+]
+
+
 class Topic(BaseModel):
     slug: str
     name: str
@@ -36,6 +52,11 @@ class Clip(BaseModel):
     created_at: str | None = None
     section_index: int | None = None
     narrative_rank: int | None = None
+    pedagogical_role: PedagogicalRole | None = None
+    role_ordinal: int | None = None          # realized-arc position (1-based)
+    concept_label: str | None = None
+    engagement_score: float | None = None    # [0,1], tiebreaker only
+    coherence_score: float | None = None     # topic-level, mirrored per clip like story_score
     embedding: list[float] | None = Field(default=None, exclude=True)
 
     @field_validator("embedding", mode="before")
@@ -80,3 +101,53 @@ class TopicRecommendation(BaseModel):
     difficulty: str
     clip_count: int
     rationale: str
+
+
+class LearningAtom(BaseModel):
+    id: str
+    topic_slug: str
+    video_id: str
+    source_url: str
+    role: PedagogicalRole
+    concept: str                       # 1-200 chars, non-empty
+    prior_knowledge: list[str] = []    # 0-50 distinct, none == concept
+    start: float                       # >= 0
+    end: float                         # > start, <= transcript duration
+    transcript: str | None = None
+
+
+class ArcRole(BaseModel):
+    role: PedagogicalRole
+    ordinal: int                       # consecutive from 1, matches template order
+
+
+class PlannedArc(BaseModel):
+    topic_slug: str
+    concept_type: ConceptType
+    default_applied: bool = False      # Req 1.7
+    template_empty: bool = False       # Req 1.8 -> roles == []
+    roles: list[ArcRole] = []
+
+
+class CoherenceDefect(BaseModel):
+    defect_type: DefectType
+    clip_positions: list[int] = []     # 1-based ordinals of affected clips
+    role: PedagogicalRole | None = None
+
+
+class CoherenceResult(BaseModel):
+    coherence_score: float             # [0,1], 2 dp
+    defects: list[CoherenceDefect] = []
+    round_index: int = 0
+
+
+class ArcDiff(BaseModel):
+    missing_roles: list[PedagogicalRole] = []
+    order_mismatch_positions: list[int] = []
+    aligned: bool
+
+
+class AlignmentResult(BaseModel):
+    aligned: bool
+    diff: ArcDiff
+    unresolved: bool = False
