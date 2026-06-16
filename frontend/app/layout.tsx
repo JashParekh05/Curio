@@ -6,6 +6,11 @@ import GuestGate from "@/components/GuestGate";
 export const metadata: Metadata = {
   title: "Curio",
   description: "Educational short-form video, tailored to what you want to learn.",
+  appleWebApp: {
+    capable: true,
+    title: "Curio",
+    statusBarStyle: "default",
+  },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

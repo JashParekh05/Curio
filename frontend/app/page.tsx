@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { createLearningPath, getUserHistory, getUserProfile, getTopicSections, type LearningPath, type LearningPathSummary, type TopicSection } from "@/lib/api";
+import { hasSeenIntro } from "@/lib/intro";
 
 const SUGGESTIONS = [
   "I want to learn hashmaps and binary trees",
@@ -29,6 +30,13 @@ export default function Home() {
 
   useEffect(() => {
     if (!user || !session) return;
+    // The intro/demo carousel is the very first thing a new visitor sees —
+    // gate on it before anything else (history, onboarding) so it can't be
+    // skipped past by a faster-resolving redirect.
+    if (!hasSeenIntro()) {
+      router.replace("/welcome");
+      return;
+    }
     getUserHistory(user.id, session.access_token).then(setHistory).catch(() => {});
     if (isAuthenticated) {
       getUserProfile(user.id, session.access_token).then((p) => {
@@ -102,19 +110,35 @@ export default function Home() {
             </div>
           </div>
           {isGuest ? (
-            <button
-              onClick={() => router.push("/login")}
-              className="brutal-btn bg-accent-cyan text-ink text-sm px-3 py-2"
-            >
-              Save progress
-            </button>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => router.push("/welcome")}
+                className="text-ink/50 hover:text-ink text-xs font-bold transition"
+              >
+                How it works
+              </button>
+              <button
+                onClick={() => router.push("/login")}
+                className="brutal-btn bg-accent-cyan text-ink text-sm px-3 py-2"
+              >
+                Save progress
+              </button>
+            </div>
           ) : (
-            <button
-              onClick={signOut}
-              className="brutal-btn bg-white text-ink text-sm px-3 py-2"
-            >
-              Sign out
-            </button>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => router.push("/welcome")}
+                className="text-ink/50 hover:text-ink text-xs font-bold transition"
+              >
+                How it works
+              </button>
+              <button
+                onClick={signOut}
+                className="brutal-btn bg-white text-ink text-sm px-3 py-2"
+              >
+                Sign out
+              </button>
+            </div>
           )}
         </div>
 
