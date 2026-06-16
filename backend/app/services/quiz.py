@@ -13,7 +13,8 @@ import logging
 logger = logging.getLogger(__name__)
 
 MODEL = "gpt-4o-mini"
-QUESTIONS_PER_TOPIC = 3        # how many MCQs to aim for per topic
+QUESTIONS_PER_TOPIC = 3        # target MCQs to keep per topic
+GENERATION_POOL = 6           # candidates to generate (the judge rejects some)
 _TRANSCRIPT_BUDGET = 2000      # chars of source excerpt fed to generation
 
 # Scoring + mastery knobs.
@@ -280,15 +281,16 @@ def generate_and_store_questions(topic_slug: str, topic_name: str) -> int:
     if not sections and not transcripts:
         return 0  # nothing to generate from
 
-    # Generate -> validate -> judge, retrying the batch up to the bound.
+    # Generate a pool (the judge rejects some) -> validate -> judge, retrying
+    # the batch up to the bound. Keep up to QUESTIONS_PER_TOPIC that pass.
     kept: list[dict] = []
     for _ in range(MAX_GENERATION_ATTEMPTS):
         try:
-            raw = _generate_questions(topic_name, sections, transcripts)
+            raw = _generate_questions(topic_name, sections, transcripts, n=GENERATION_POOL)
         except Exception as exc:
             logger.warning(f"[quiz] generation failed for '{topic_name}': {exc}")
             break
-        kept = _vet_questions(topic_name, raw)
+        kept = _vet_questions(topic_name, raw)[:QUESTIONS_PER_TOPIC]
         if kept:
             break
 
