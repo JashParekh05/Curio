@@ -32,3 +32,6 @@ backend/.whisper_cache/
 
 # graphify knowledge-graph tool output (regenerated locally on demand)
 graphify-out/
+
+# Kiro spec docs (kept local, not pushed)
+.kiro/specs/
