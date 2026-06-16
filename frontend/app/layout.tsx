@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { Analytics } from "@vercel/analytics/next";
 import { AuthProvider } from "@/lib/auth-context";
 import GuestGate from "@/components/GuestGate";
 
@@ -21,6 +22,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           {children}
           <GuestGate />
         </AuthProvider>
+        <Analytics />
       </body>
     </html>
   );
