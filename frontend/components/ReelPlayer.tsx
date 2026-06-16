@@ -87,22 +87,22 @@ export default function ReelPlayer({ clip, active, onEnded, onFeedback }: Props)
 
       {/* Native video load error */}
       {videoError && (
-        <div className="absolute inset-0 bg-black/80 flex flex-col items-center justify-center gap-3 z-10">
-          <p className="text-zinc-400 text-sm">Couldn&apos;t load video</p>
+        <div className="absolute inset-0 bg-black/80 flex flex-col items-center justify-center gap-4 z-10">
+          <p className="brutal-dark bg-ink text-white text-sm font-bold px-3 py-2">Couldn&apos;t load video</p>
           <button
             onClick={onEnded}
-            className="bg-white/10 text-white text-sm px-4 py-2 rounded-xl hover:bg-white/20 transition"
+            className="brutal-dark-btn bg-accent-yellow text-ink text-sm font-bold px-4 py-2"
           >
-            Skip →
+            Skip
           </button>
         </div>
       )}
 
       {/* Caption bar */}
-      <div className="absolute bottom-28 inset-x-0 z-10 pl-4 pr-16 pb-2 pointer-events-none">
-        <p className="text-white font-semibold text-base leading-snug drop-shadow-lg line-clamp-2">{clip.title}</p>
+      <div className="absolute bottom-28 inset-x-0 z-10 pl-4 pr-20 pb-2 pointer-events-none">
+        <span className="brutal-dark inline-block bg-ink text-white font-extrabold text-base leading-snug px-2 py-1 line-clamp-2">{clip.title}</span>
         {clip.description && (
-          <p className="text-zinc-300 text-sm mt-1 leading-snug drop-shadow line-clamp-2">{clip.description}</p>
+          <p className="text-white text-sm mt-2 leading-snug drop-shadow line-clamp-2 font-medium">{clip.description}</p>
         )}
       </div>
 
@@ -112,26 +112,26 @@ export default function ReelPlayer({ clip, active, onEnded, onFeedback }: Props)
           <button
             onClick={() => { setFeedback("want_more"); onFeedback("want_more"); }}
             disabled={feedback !== null}
-            className={`w-11 h-11 rounded-full backdrop-blur-sm border flex items-center justify-center text-lg transition active:scale-95 disabled:cursor-default ${
+            className={`brutal-dark-btn w-12 h-12 flex items-center justify-center text-[10px] font-extrabold uppercase tracking-tight disabled:cursor-default ${
               feedback === "want_more"
-                ? "bg-orange-500/80 border-orange-400 text-white"
-                : "bg-black/30 border-zinc-700 text-zinc-400 hover:border-orange-500/60 hover:text-orange-400"
+                ? "bg-accent-orange text-ink"
+                : "bg-ink text-white"
             }`}
             title="I want more of this"
           >
-            🔥
+            More
           </button>
           <button
             onClick={() => { setFeedback("already_know"); onFeedback("already_know"); }}
             disabled={feedback !== null}
-            className={`w-11 h-11 rounded-full backdrop-blur-sm border flex items-center justify-center text-lg transition active:scale-95 disabled:cursor-default ${
+            className={`brutal-dark-btn w-12 h-12 flex items-center justify-center text-[10px] font-extrabold uppercase tracking-tight disabled:cursor-default ${
               feedback === "already_know"
-                ? "bg-emerald-500/80 border-emerald-400 text-white"
-                : "bg-black/30 border-zinc-700 text-zinc-400 hover:border-emerald-500/60 hover:text-emerald-400"
+                ? "bg-accent-lime text-ink"
+                : "bg-ink text-white"
             }`}
             title="I already know this topic"
           >
-            ✓
+            Know
           </button>
         </div>
       )}
