@@ -245,7 +245,34 @@ def run_pipeline(
     section_title/section_description/arc_titles give the segmenter narrative
     context so a section's clips form a connected mini-story; they're optional
     so non-section callers (discover seeding, recommendations) are unaffected.
+
+    Routing (task 11.1): a WHOLE-TOPIC call (``section_index is None``) is routed
+    through the shared Ingestion_Pipeline (``ingestion_pipeline.ingest_topic`` ->
+    DECODE -> MAP -> JUDGE -> ADMIT) -- the SAME path the cold-start Seeding_Worker
+    uses -- so on-demand topics produce plan-mapped, coherence/alignment-checked,
+    per-segment-judged Admitted_Clips instead of raw hand-picked segments
+    (Req 5.1, 7.3). ``ingest_topic`` is best-effort end to end, drives the
+    Planned_Arc + the single ``youtube.youtube_search`` charge site itself, and
+    returns an ``IngestionSummary`` whose ``stored`` is the Admitted_Clip count.
+
+    A SECTION-BASED call (``section_index is not None``, e.g. per-beat planning
+    from ``topics.py``) KEEPS the existing LangGraph pipeline below unchanged, so
+    per-section narrative generation is not broken (``ingest_topic`` does a
+    whole-topic ingestion and is not section-aware).
+
+    Imported lazily inside the function to avoid an import-time cycle
+    (services -> ... -> pipeline_agent).
     """
+    if section_index is None:
+        from app.services.ingestion_pipeline import ingest_topic
+
+        summary = ingest_topic(topic_slug, topic_name)
+        logger.info(
+            f"[pipeline_agent] whole-topic '{topic_slug}' routed through "
+            f"ingest_topic: outcome={summary.outcome} stored={summary.stored}"
+        )
+        return summary.stored
+
     global _pipeline_graph
     if _pipeline_graph is None:
         _pipeline_graph = build_pipeline_graph()

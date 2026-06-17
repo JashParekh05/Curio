@@ -20,9 +20,9 @@ no policy of its own:
   - quota persistence -> ``app.services.quota_store`` (``load_today``)
   - backlog persistence -> ``app.services.backlog_store``
     (``load_pending``, ``persist_status``, ``spawn_adjacent_for``)
-  - generation -> the existing content-coherence pipeline
-    (``topics._process_single_topic`` -> ``run_pipeline`` -> coherence/alignment
-    passes), the SAME path learner-initiated topics use.
+  - generation -> the shared Ingestion_Pipeline
+    (``ingestion_pipeline.ingest_topic`` -> DECODE -> MAP -> JUDGE -> ADMIT), the
+    SAME path learner-initiated topics use.
 
 ``run_once`` performs a single paced pass and returns a
 ``{processed, skipped, charged_units, stopped_reason}`` summary. It NEVER raises:
@@ -30,16 +30,18 @@ a per-item failure is logged with the topic id and the failure reason and the
 loop continues, so a single bad topic can neither halt the run nor block any feed
 request (the worker runs entirely out-of-band).
 
-Ingestion routing (task 12.2): ``_generate`` drives each Backlog_Item through the
-existing Ingestion_Pipeline (``topics._process_single_topic``) rather than a bare
-``run_pipeline`` call, so seeded clips are plan-mapped (``plan_and_store_arc`` ->
-``segment_into_atoms`` -> ``arc_assembler.assemble``) and coherence-checked
-(``coherence.run_repair_loop`` + ``alignment.check_and_repair``) and persist with
-``pedagogical_role``, ``role_ordinal``, covered concept, and coherence metadata
-identical to learner-initiated clips. ``_generate`` additionally stamps the
-topic's ``content_level`` (from the Backlog_Item's level) onto the persisted clips
-so Discover level filtering works. The per-topic model-call budget and the
-bounded coherence/alignment repair loops are owned by that existing machinery and
+Ingestion routing (task 11.2): ``_generate`` drives each Backlog_Item through the
+shared Ingestion_Pipeline (``ingestion_pipeline.ingest_topic``) rather than the
+raw ``topics._process_single_topic`` / bare segmentation path, so seeded clips go
+through the full DECODE -> MAP -> JUDGE -> ADMIT pipeline -- decoded over the whole
+transcript, plan-mapped (``arc_assembler.assemble``), coherence-checked
+(``coherence.run_repair_loop`` + ``alignment.check_and_repair``), per-segment
+judged, and admitted with ``pedagogical_role``, ``role_ordinal``, covered concept,
+and coherence metadata IDENTICAL to learner-initiated clips (``ingest_topic`` ->
+``persist_admitted`` persists that field set). ``_generate`` additionally stamps
+the topic's ``content_level`` (from the Backlog_Item's level) onto the persisted
+clips so Discover level filtering works. The per-topic Model_Call_Budget and the
+bounded coherence/alignment repair loops are owned by that shared machinery and
 are reused, not rebuilt here; the YouTube Quota_Cost stays paced by the Key_Pool
 through the run loop and the single ``youtube.youtube_search`` charge site.
 
@@ -50,7 +52,6 @@ Validates: Requirements 2.1, 2.2, 2.3, 2.4, 2.7, 2.8, 2.9, 2.10, 2.11, 2.12,
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 import sys
 from datetime import datetime
@@ -72,11 +73,12 @@ from app.services.topic_frontier import BacklogItem, apply_seed_outcome, select_
 
 logger = logging.getLogger(__name__)
 
-#: Per-item Quota_Cost estimate used by the pacing gate. The deep-ingestion
-#: routing in task 12.2 will derive a per-topic section/cached-query count; until
-#: then a Backlog_Item is paced as one not-yet-cached search query (one
-#: ``youtube/v3/search`` + one ``videos.list``). Sourced from the pure estimator
-#: so the single source of truth for Quota_Cost stays in ``seeding``/``quota_pool``.
+#: Per-item Quota_Cost estimate used by the pacing gate. A Backlog_Item is paced
+#: as one not-yet-cached search query (one ``youtube/v3/search`` +
+#: one ``videos.list``); the real spend stays paced by the Key_Pool through the
+#: single ``youtube.youtube_search`` charge site inside ``ingest_topic``. Sourced
+#: from the pure estimator so the single source of truth for Quota_Cost stays in
+#: ``seeding``/``quota_pool``.
 _DEFAULT_SECTION_COUNT: int = 1
 _DEFAULT_CACHED_QUERIES: int = 0
 
@@ -158,40 +160,41 @@ def _stamp_content_level(topic: str, level: str | None) -> None:
 
 
 def _generate(item: BacklogItem) -> int:
-    """Ingest a Backlog_Item through the existing content-coherence pipeline.
+    """Ingest a Backlog_Item through the shared Ingestion_Pipeline.
 
-    Routes the topic through ``topics._process_single_topic`` -- the SAME path
-    learner-initiated topics use -- so the seeded clips are plan-mapped and
-    coherence-checked rather than raw segmentation output (Req 2.3, 8.1-8.6):
+    Routes the topic through ``ingestion_pipeline.ingest_topic`` -- the SAME
+    shared DECODE -> MAP -> JUDGE -> ADMIT path the on-demand ``run_pipeline``
+    uses -- so the seeded clips are decoded over the whole transcript, plan-mapped
+    to the topic's Planned_Arc, coherence/alignment-checked, per-segment judged,
+    and admitted with the IDENTICAL clip field set as learner-initiated content
+    (``ingest_topic`` -> ``persist_admitted`` writes non-null ``pedagogical_role``,
+    ``role_ordinal``, ``concept_label`` and coherence metadata) rather than raw
+    segmentation output (Req 7.1, 7.2).
 
-      plan_and_store_sections -> run_pipeline per section (fetch/decode transcript
-      -> segment_into_atoms) -> plan_and_store_arc -> arc_assembler.assemble ->
-      coherence.run_repair_loop -> alignment.check_and_repair -> persist clips
-      with pedagogical_role, role_ordinal, covered concept and coherence metadata
-      -> story/quiz passes.
-
-    That machinery is best-effort end to end: a video whose transcript cannot be
-    fetched/decoded is skipped, a topic that yields no atoms produces no
-    library-eligible clips, and only the coherence/alignment-annotated subset is
-    promoted -- none of which raises (Req 8.7, 8.11, 8.12). The per-topic
-    model-call budget and the bounded repair loops live inside that existing
-    machinery and are reused, not rebuilt here (Req 8.8).
+    ``ingest_topic`` is best-effort end to end and never raises: a video whose
+    transcript cannot be fetched/decoded is skipped, a topic that yields no atoms
+    admits nothing, the YouTube spend is routed through the single
+    ``youtube.youtube_search`` charge site (deferring when the Key_Pool can afford
+    nothing), and the per-topic Model_Call_Budget and bounded repair loops live
+    inside that shared machinery -- reused here, not rebuilt.
 
     After ingestion, the topic's Content_Level (from ``item.level``) is stamped
-    onto the persisted clips so Discover level filtering works (Req 8.5).
+    onto the persisted clips so Discover level filtering works (preserves the
+    existing ``_stamp_content_level`` behavior).
 
-    Idempotency / resume (Req 8.9, 8.10, 2.4, 2.7, 6.6): a topic that already has
-    clips is left untouched and consumes zero model calls; its existing clip count
-    is returned so the run loop marks it done. The run loop also gates this via
+    Idempotency / resume (Req 2.4, 2.7, 6.6): a topic that already has clips is
+    left untouched and consumes zero model calls; its existing clip count is
+    returned so the run loop marks it done. The run loop also gates this via
     ``should_skip`` before calling ``_generate``, so this guard is a defensive
-    second line for direct calls.
+    second line for direct calls (``ingest_topic`` itself also skips already
+    ingested topics for zero quota).
 
     Returns the number of clips stored for the topic (``>= 1`` means the seed
-    succeeded). Never raises: any failure degrades to a clip count (0 leaves the
-    Backlog_Item pending for retry).
+    succeeded), counted from the library after ingestion so the run loop's
+    success/outcome logic is unchanged. Never raises: any failure degrades to a
+    clip count (0 leaves the Backlog_Item pending for retry).
 
-    Validates: Requirements 2.3, 8.1, 8.2, 8.3, 8.4, 8.5, 8.6, 8.7, 8.8, 8.9,
-    8.10, 8.11, 8.12
+    Validates: Requirements 7.1, 7.2
     """
     slug = item.topic
     name = slug.replace("-", " ").title()
@@ -222,20 +225,29 @@ def _generate(item: BacklogItem) -> int:
     except Exception as exc:
         logger.warning("[worker] topic upsert failed for '%s': %s", slug, exc)
 
-    # Route through the existing Ingestion_Pipeline (the learner-initiated path).
-    # Imported lazily to avoid an import-time cycle (topics -> services -> ...).
-    from app.api.topics import _process_single_topic
+    # Route through the shared Ingestion_Pipeline (the learner-initiated path).
+    # Imported lazily to avoid an import-time cycle (services -> ... -> worker).
+    from app.services.ingestion_pipeline import ingest_topic
 
     try:
-        asyncio.run(_process_single_topic(slug, name))
+        summary = ingest_topic(slug, name)
+        logger.info(
+            "[worker] ingest_topic('%s') outcome=%s stored=%d%s",
+            slug,
+            summary.outcome,
+            summary.stored,
+            f" (deferred: {summary.deferred_reason})" if summary.deferred_reason else "",
+        )
     except Exception as exc:
-        # _process_single_topic is itself best-effort and should not raise, but
-        # guard the event-loop boundary so a stray error never halts the run.
+        # ingest_topic is itself best-effort and should not raise, but guard the
+        # call boundary so a stray error never halts the run.
         logger.warning("[worker] ingestion pipeline failed for '%s': %s", slug, exc)
 
     # Stamp the Content_Level onto whatever coherent clips were persisted.
     _stamp_content_level(slug, item.level)
 
+    # Count clips from the library so the run loop's success/outcome logic is
+    # unchanged (a topic with >= 1 stored clip is a success).
     return _count_clips(slug)
 
 
