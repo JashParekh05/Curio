@@ -5,7 +5,6 @@ import logging
 from typing import TypedDict, Annotated
 import operator
 
-
 from langgraph.graph import StateGraph, END
 from app.models.schemas import Topic, LearningPath
 
