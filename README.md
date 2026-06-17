@@ -58,7 +58,16 @@ uvicorn app.main:app --reload --port 8000
 scripts/migration_pgvector.sql
 scripts/migration_sections.sql        # topic_sections table
 scripts/migration_grade_level.sql     # user_profiles.grade_level
+scripts/migration_cold_start.sql      # project_quota_usage + RPC, topic_backlog, clips.content_level
 ```
+
+> **Required, not optional.** `migration_cold_start.sql` creates the
+> `project_quota_usage` table and `increment_quota_usage` RPC. The YouTube quota
+> charge site **fails closed**: if that table is missing, every search is treated
+> as unaffordable and *no* clips are generated anywhere (learn page or Discover).
+> If feeds hang on "processing" and logs show
+> `Could not find the table 'public.project_quota_usage'`, this migration hasn't
+> been run.
 
 Plus the cache tables + feedback column:
 
@@ -104,6 +113,37 @@ python -m scripts.seed_clips binary-search hashmaps    # specific topics
 python -m scripts.bulk_seed                           # bulk-seed from a CSV of (slug, url)
 python -m scripts.backfill_embeddings                 # embed any clips missing a vector
 ```
+
+### Offline seeding worker (cron)
+
+The `Seeding_Worker` grows the cold-start library ahead of demand by draining the
+persisted `topic_backlog` (Topic_Frontier) one paced chunk at a time. It is
+self-pacing and resumable, and never overspends the per-project YouTube quota, so
+it's safe to run on a schedule.
+
+```bash
+cd backend
+python -m scripts.seeding_worker            # one paced pass, default cap (25 items)
+python -m scripts.seeding_worker 10         # process at most 10 items this run
+scripts/run_seeding_worker.sh               # cron wrapper: venv + lock + logging
+```
+
+**Production (Render):** `render.yaml` defines an `edureel-seeding-worker` cron
+job that runs `python -m scripts.seeding_worker` every 6 hours using the same
+Docker image as the web service. Apply via Render → Blueprints.
+
+**Local / any server (crontab):** the wrapper resolves its own paths, prefers the
+project venv, holds a single-instance lock, and logs to `backend/logs/`:
+
+```cron
+# every 6 hours
+0 */6 * * * /Users/jbparekh/edureel/backend/scripts/run_seeding_worker.sh
+```
+
+> The worker shares the same 10,000 units/day quota pool as live learn/Discover
+> traffic. Keep the cadence conservative (every few hours) so background seeding
+> leaves quota headroom for interactive requests; a run that finds the budget
+> spent stops cleanly having done nothing.
 
 ### Tests
 
