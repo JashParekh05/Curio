@@ -156,12 +156,16 @@ def test_search_node_uses_medium_duration_and_captures_signals(monkeypatch):
         planner's 5-10 min intent)
       - videos.list MUST request the 'statistics' part (for view_count)
       - candidates MUST carry view_count and has_caption through to ranking
+
+    This config now lives in youtube._search_and_describe — the single quota
+    charge site that pipeline_agent._node_search delegates to — so the guard
+    follows it there. The 1-unit metadata charge is stubbed to succeed so the
+    videos.list enrichment call runs.
     """
     import requests as _requests
-    monkeypatch.setenv("YOUTUBE_API_KEY", "test-key")
-    # Force a cache miss so the live path runs (search_cache_get swallows errors).
-    monkeypatch.setattr(youtube, "search_cache_get", lambda q: None)
-    monkeypatch.setattr(youtube, "search_cache_put", lambda q, v: None)
+
+    # The metadata charge must succeed for the videos.list call to fire.
+    monkeypatch.setattr(youtube, "charge_and_persist", lambda *a, **k: True)
 
     captured = {}
 
@@ -185,15 +189,49 @@ def test_search_node_uses_medium_duration_and_captures_signals(monkeypatch):
 
     monkeypatch.setattr(_requests, "get", fake_get)
 
-    out = pipeline_agent._node_search({
-        "topic_slug": "t", "topic_name": "T", "search_query": "q", "section_index": 1,
-    })
+    videos = youtube._search_and_describe("q", "test-key", "projA", None)
 
     assert captured["search_params"]["videoDuration"] == "medium"
     assert "statistics" in captured["details_params"]["part"]
-    by_id = {v["video_id"]: v for v in out["videos"]}
+    by_id = {v["video_id"]: v for v in videos}
     assert by_id["vid1"]["view_count"] == 1234567
     assert by_id["vid1"]["has_caption"] is True
     assert by_id["vid2"]["view_count"] == 42
     assert by_id["vid2"]["has_caption"] is False
     assert by_id["vid1"]["duration_seconds"] == 390  # 6:30 parsed correctly
+
+
+def test_node_search_delegates_to_youtube_search(monkeypatch):
+    """_node_search now orchestrates only: it forwards the resolved query to the
+    single charge site and maps the result onto its unchanged {"videos"/"errors"}
+    contract, without issuing HTTP or re-checking the cache itself."""
+    calls = {}
+
+    def fake_youtube_search(query, **kwargs):
+        calls["query"] = query
+        return [{"video_id": "v1", "title": "T", "view_count": 5}]
+
+    monkeypatch.setattr(youtube, "youtube_search", fake_youtube_search)
+
+    # No explicit search_query -> falls back to "<topic_name> explained".
+    out = pipeline_agent._node_search({
+        "topic_slug": "t", "topic_name": "Photosynthesis", "section_index": 1,
+    })
+    assert calls["query"] == "Photosynthesis explained"
+    assert out == {"videos": [{"video_id": "v1", "title": "T", "view_count": 5}]}
+
+    # No affordable quota -> None surfaces as an error with an empty video list.
+    monkeypatch.setattr(youtube, "youtube_search", lambda q, **k: None)
+    out = pipeline_agent._node_search({
+        "topic_slug": "t", "topic_name": "T", "search_query": "q", "section_index": 1,
+    })
+    assert out["videos"] == []
+    assert out["errors"] and "unavailable" in out["errors"][0]
+
+    # Successful-but-empty search -> "no results" error, still empty video list.
+    monkeypatch.setattr(youtube, "youtube_search", lambda q, **k: [])
+    out = pipeline_agent._node_search({
+        "topic_slug": "t", "topic_name": "T", "search_query": "q", "section_index": 1,
+    })
+    assert out["videos"] == []
+    assert out["errors"] == ["No results for t"]

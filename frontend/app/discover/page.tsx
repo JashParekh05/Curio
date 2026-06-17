@@ -40,11 +40,17 @@ export default function DiscoverPage() {
     const token = session.access_token;
 
     function doFetch() {
-      getDiscoverFeed(user!.id, token).then((c) => {
+      getDiscoverFeed(user!.id, token).then(({ clips: c, processing }) => {
         const fresh = c.filter((clip) => !seenClipIdsRef.current.has(clip.id));
         fresh.forEach((clip) => seenClipIdsRef.current.add(clip.id));
         if (fresh.length > 0) {
           setClips(fresh);
+          setFetching(false);
+          clearInterval(pollRef.current);
+          clearTimeout(coldStartTimeoutRef.current);
+        } else if (!processing) {
+          // Library is settled (nothing generating) and still no clips for us —
+          // stop polling rather than waiting out the full cold-start window.
           setFetching(false);
           clearInterval(pollRef.current);
           clearTimeout(coldStartTimeoutRef.current);
@@ -147,7 +153,7 @@ export default function DiscoverPage() {
     fetchingMoreRef.current = true;
     getDiscoverFeed(user.id, session.access_token)
       .then((more) => {
-        const fresh = more.filter((clip) => !seenClipIdsRef.current.has(clip.id));
+        const fresh = more.clips.filter((clip) => !seenClipIdsRef.current.has(clip.id));
         fresh.forEach((clip) => seenClipIdsRef.current.add(clip.id));
         setClips((prev) => [...prev, ...fresh]);
       })
@@ -365,7 +371,7 @@ export default function DiscoverPage() {
                 setLoadingMore(true);
                 getDiscoverFeed(user.id, session.access_token)
                   .then((more) => {
-                    const fresh = more.filter((clip) => !seenClipIdsRef.current.has(clip.id));
+                    const fresh = more.clips.filter((clip) => !seenClipIdsRef.current.has(clip.id));
                     fresh.forEach((clip) => seenClipIdsRef.current.add(clip.id));
                     setClips((prev) => [...prev, ...fresh]);
                   })

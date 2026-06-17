@@ -24,93 +24,29 @@ class PipelineState(TypedDict):
 
 
 def _node_search(state: PipelineState) -> dict:
-    import os, requests
-    from app.services.youtube import search_cache_get, search_cache_put
+    # All YouTube quota spending lives in youtube.youtube_search — the single
+    # charge site. It is cache-first (a youtube_search_cache hit costs 0 units
+    # and never touches the quota pool), selects an affordable Google Cloud
+    # project, charges the 100-unit search BEFORE the API call, then performs
+    # videos.list (1 unit) and caches the result. This node only orchestrates;
+    # it no longer issues HTTP requests or re-checks the cache itself (avoiding
+    # a redundant double cache read), and returns the same external contract.
+    from app.services.youtube import youtube_search
 
     query = state.get("search_query") or f"{state['topic_name']} explained"
 
-    # Serve from cache when possible — a YouTube search costs 100 quota units
-    # (10k/day free). Caching by query means re-testing the same topics is free.
-    cached = search_cache_get(query)
-    if cached:
-        logger.info(f"[pipeline_agent] search cache hit: query='{query}' ({len(cached)} videos, 0 units)")
-        return {"videos": cached}
-
-    api_key = os.environ.get("YOUTUBE_API_KEY", "")
-    if not api_key:
-        return {"errors": ["YOUTUBE_API_KEY not set"], "videos": []}
-
-    logger.info(f"[pipeline_agent] search: topic={state['topic_slug']} section={state.get('section_index')} query='{query}' (~100 units)")
-
-    search = requests.get(
-        "https://www.googleapis.com/youtube/v3/search",
-        params={
-            "key": api_key,
-            "q": query,
-            "type": "video",
-            # "medium" = 4-20 min. The section planner writes queries targeting a
-            # focused 5-10 min explainer; "short" (<4 min) filtered those out and
-            # contradicted the query intent, starving segmentation of substance.
-            "videoDuration": "medium",
-            "videoEmbeddable": "true",
-            "safeSearch": "strict",
-            "relevanceLanguage": "en",
-            "maxResults": 6,
-            "part": "snippet",
-        },
-        timeout=10,
+    logger.info(
+        f"[pipeline_agent] search: topic={state['topic_slug']} "
+        f"section={state.get('section_index')} query='{query}'"
     )
-    if not search.ok:
-        return {"errors": [f"YouTube search failed: {search.status_code}"], "videos": []}
 
-    items = search.json().get("items", [])
-    if not items:
+    videos = youtube_search(query)
+    if videos is None:
+        # No project could afford the search (or none configured): nothing spent.
+        return {"errors": ["YouTube search unavailable: no affordable quota"], "videos": []}
+    if not videos:
         return {"errors": [f"No results for {state['topic_slug']}"], "videos": []}
 
-    video_ids = [i["id"]["videoId"] for i in items]
-    details = requests.get(
-        "https://www.googleapis.com/youtube/v3/videos",
-        params={"key": api_key, "id": ",".join(video_ids), "part": "contentDetails,snippet,statistics"},
-        timeout=10,
-    )
-    logger.info(f"[pipeline_agent] videos.list (~1 unit)")
-
-    durations: dict[str, int] = {}
-    captions: dict[str, bool] = {}
-    views: dict[str, int] = {}
-    if details.ok:
-        import re
-        for v in details.json().get("items", []):
-            cd = v.get("contentDetails", {})
-            m = re.match(r"PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?", cd.get("duration", ""))
-            if m:
-                h, mn, s = (int(x or 0) for x in m.groups())
-                durations[v["id"]] = h * 3600 + mn * 60 + s
-            # Uploader-provided caption flag. NOTE: this is False for videos that
-            # only have YouTube auto-generated captions, which TranscriptAPI can
-            # still fetch — so we use it as a soft ranking bonus, never a filter.
-            captions[v["id"]] = cd.get("caption") == "true"
-            try:
-                views[v["id"]] = int(v.get("statistics", {}).get("viewCount", 0))
-            except (TypeError, ValueError):
-                views[v["id"]] = 0
-
-    videos = []
-    for item in items:
-        vid_id = item["id"]["videoId"]
-        snippet = item["snippet"]
-        videos.append({
-            "video_id": vid_id,
-            "title": snippet["title"],
-            "description": snippet.get("description", "")[:200] or None,
-            "thumbnail_url": snippet.get("thumbnails", {}).get("high", {}).get("url"),
-            "duration_seconds": durations.get(vid_id, 180),
-            "has_caption": captions.get(vid_id, False),
-            "view_count": views.get(vid_id, 0),
-        })
-
-    if videos:
-        search_cache_put(query, videos)
     return {"videos": videos}
 
 

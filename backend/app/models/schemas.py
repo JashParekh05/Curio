@@ -57,6 +57,7 @@ class Clip(BaseModel):
     concept_label: str | None = None
     engagement_score: float | None = None    # [0,1], tiebreaker only
     coherence_score: float | None = None     # topic-level, mirrored per clip like story_score
+    content_level: str | None = None         # Content_Level; None for pre-feature clips
     embedding: list[float] | None = Field(default=None, exclude=True)
 
     @field_validator("embedding", mode="before")
@@ -93,6 +94,11 @@ class FeedResponse(BaseModel):
     clips: list[Clip]
     processing: bool = False
     failed: bool = False  # terminal: out of retry budget and still empty
+
+
+class DiscoverResponse(BaseModel):
+    clips: list[Clip]
+    processing: bool = False  # true when library empty + topup running (Req 5.6)
 
 
 class TopicRecommendation(BaseModel):

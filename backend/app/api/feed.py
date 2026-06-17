@@ -2,7 +2,7 @@ import asyncio
 import logging
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from app.rate_limit import limiter
-from app.models.schemas import Clip, ClipEvent, FeedResponse, TopicRecommendation
+from app.models.schemas import Clip, ClipEvent, FeedResponse, TopicRecommendation, DiscoverResponse
 from app.db.supabase import get_client
 from app.auth import require_user
 
@@ -22,6 +22,12 @@ from app.services.discover_seeding import (
     _GRADE_DIFFICULTY,
 )
 from app.services.path_extension import _should_extend, _extend_path, _LOW_CLIPS_THRESHOLD
+from app.services.level_filter import (
+    derive_content_level,
+    rank_by_level,
+    exclude_below,
+    fallback_order,
+)
 from app.services import self_heal_state
 from app.services.topic_expansion import (
     _is_expansion_candidate,
@@ -290,7 +296,7 @@ async def get_feed(
     return FeedResponse(topic_slug=topic_slug, clips=clips, processing=len(clips) == 0)
 
 
-@router.get("/discover/{user_id}", response_model=list[Clip])
+@router.get("/discover/{user_id}", response_model=DiscoverResponse)
 async def get_discover_feed(user_id: str, background_tasks: BackgroundTasks, limit: int = Query(20, le=50), caller_id: str = Depends(require_user)):
     if caller_id != user_id:
         raise HTTPException(status_code=403, detail="Access denied")
@@ -308,6 +314,23 @@ async def get_discover_feed(user_id: str, background_tasks: BackgroundTasks, lim
     user_interest_vector: dict[str, float] = p.get("interest_vector") or {}
     grade_level: str = p.get("grade_level") or "high_school"
 
+    # Cold start: no behavioral taste yet — derive a taste vector from the user's
+    # onboarding interests so discovery is personalized from interests alone
+    # (semantic ranking + semantic scoring), no watch history required.
+    if taste_vector is None and interests:
+        from app.services.embeddings import embed_text
+        taste_vector = embed_text(" ".join(interests))
+
+    # Per_User_Topup: ALWAYS schedule the existing _seed_topics_bg path as a
+    # background task so the library keeps growing from grade-aligned interest
+    # seeds. It is never awaited on the request path and so can never block or
+    # hang the Discover response; shortfalls in the served feed are filled now
+    # via the Level_Filter soft fallback below and topped up later by this seed.
+    if interests:
+        seed_slugs = _interest_seed_slugs(interests, grade_level)
+        if seed_slugs:
+            background_tasks.add_task(_seed_topics_bg, seed_slugs, _GRADE_DIFFICULTY.get(grade_level, "intermediate"))
+
     # Build seen_ids from all sessions — single batched query
     seen_ids: set[str] = set()
     try:
@@ -324,7 +347,7 @@ async def get_discover_feed(user_id: str, background_tasks: BackgroundTasks, lim
         all_slugs = [t["slug"] for t in all_topics.data]
     except Exception as e:
         logger.error(f"[feed] Failed to fetch topics for discover user={user_id}: {e}")
-        return []
+        return DiscoverResponse(clips=[], processing=True)
     # Restrict discovery to topics that actually have clips, so the feed is both
     # relevant AND populated. Grade-map seed slugs are mostly empty placeholders,
     # which is why discovery used to fall back to generic top-hook clips.
@@ -336,20 +359,17 @@ async def get_discover_feed(user_id: str, background_tasks: BackgroundTasks, lim
         logger.warning(f"[feed] Failed to fetch populated slugs for discover user={user_id}: {e}")
         candidate_slugs = all_slugs
 
-    # Cold start: no behavioral taste yet — derive a taste vector from the user's
-    # onboarding interests so discovery is personalized from interests alone
-    # (semantic ranking + semantic scoring), no watch history required.
-    if taste_vector is None and interests:
-        from app.services.embeddings import embed_text
-        taste_vector = embed_text(" ".join(interests))
-        # Keep growing the library in the background from grade-aligned seeds.
-        seed_slugs = _interest_seed_slugs(interests, grade_level)
-        if seed_slugs:
-            background_tasks.add_task(_seed_topics_bg, seed_slugs, _GRADE_DIFFICULTY.get(grade_level, "intermediate"))
-
     relevant_slugs = _match_interest_slugs(interests, candidate_slugs, taste_vector=taste_vector)
 
     clips = _fetch_discover_clips(db, relevant_slugs, candidate_slugs, seen_ids, limit, interest_vector=user_interest_vector, taste_vector=taste_vector)
+
+    # Level-aware ranking (stage 2): the user's exact Content_Level leads, with
+    # below-level clips dropped while a match exists. rank_by_level is a stable
+    # sort, so the personalized order from _fetch_discover_clips is preserved
+    # WITHIN each level group — level dominates, personalization is the tiebreak.
+    user_level = derive_content_level(grade_level)
+    clips = exclude_below(clips, user_level)
+    clips = rank_by_level(clips, user_level)
 
     # Global fallback: seed topics are still generating — return best available clips from any topic.
     # Over-fetch so we still surface UNSEEN clips for returning users who've already watched the
@@ -364,16 +384,25 @@ async def get_discover_feed(user_id: str, background_tasks: BackgroundTasks, lim
                 .limit(limit * 5)
                 .execute()
             )
+            # Build the best-available candidate pool of UNSEEN clips, then order
+            # by level distance (nearest-higher then nearest-lower) instead of
+            # hook_score so a mis-leveled clip never leads the fallback feed.
+            candidates: list[Clip] = []
             for row in fallback.data:
-                if len(clips) >= limit:
-                    break
                 if row["id"] not in seen_ids and row["id"] not in already:
                     row.setdefault("hook_score", 0.5)
-                    clips.append(Clip(**row))
+                    candidates.append(Clip(**row))
+            for clip in fallback_order(candidates, user_level):
+                if len(clips) >= limit:
+                    break
+                clips.append(clip)
         except Exception as e:
             logger.warning(f"[feed] Global fallback query failed for user={user_id}: {e}")
 
-    return clips
+    # Instant_Feed envelope: an empty feed signals the library has no level/
+    # interest match yet and the background Per_User_Topup is generating content,
+    # so the client can show a processing state instead of hanging (Req 5.6).
+    return DiscoverResponse(clips=clips, processing=len(clips) == 0)
 
 
 @router.post("/{clip_id}/events", status_code=204)
