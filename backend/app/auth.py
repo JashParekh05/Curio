@@ -49,3 +49,24 @@ def require_user(authorization: Annotated[str | None, Header()] = None) -> str:
     if not user_id:
         raise HTTPException(status_code=401, detail="Token missing sub claim")
     return user_id
+
+
+def _operator_ids() -> set[str]:
+    """Parse the comma-separated OPERATOR_USER_IDS env into a set of user ids,
+    discarding blank entries."""
+    return {s.strip() for s in os.getenv("OPERATOR_USER_IDS", "").split(",") if s.strip()}
+
+
+def is_operator(user_id: str) -> bool:
+    """True when user_id is in the OPERATOR_USER_IDS env allowlist."""
+    return user_id in _operator_ids()
+
+
+def require_operator(caller_id: str = Depends(require_user)) -> str:
+    """FastAPI dependency — requires the caller to hold the Operator role.
+
+    Builds on require_user; raises HTTP 403 when the caller is not an operator,
+    otherwise returns the caller's user_id."""
+    if not is_operator(caller_id):
+        raise HTTPException(status_code=403, detail="Operator role required")
+    return caller_id

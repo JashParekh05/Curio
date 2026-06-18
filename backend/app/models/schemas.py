@@ -84,6 +84,20 @@ class ClipEvent(BaseModel):
     feedback: Literal["want_more", "already_know"] | None = None
 
 
+class Impression(BaseModel):
+    id: str | None = None                      # Impression identifier (final journey tie-break)
+    clip_id: str
+    session_id: str | None = None              # null for discover (no session)
+    user_id: str | None = None                 # null when learner unresolved (Req 1.9)
+    feed_surface: Literal["discover", "learn_path"]
+    feed_position: int                         # 0-based, consecutive within a serve (Req 1.4)
+    pedagogical_role: str | None = None         # Served_Context snapshot (Req 1.3, 1.5)
+    content_level: str | None = None
+    source_platform: str | None = None
+    topic_slug: str | None = None
+    served_at: str                             # UTC ISO-8601 timestamp (Req 1.6)
+
+
 class TopicRequest(BaseModel):
     query: str = Field(..., max_length=500)
     user_id: str | None = None

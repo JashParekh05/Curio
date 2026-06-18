@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from datetime import datetime, timezone
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from app.rate_limit import limiter
 from app.models.schemas import Clip, ClipEvent, FeedResponse, TopicRecommendation, DiscoverResponse
@@ -29,6 +30,8 @@ from app.services.level_filter import (
     fallback_order,
 )
 from app.services import self_heal_state
+from app.services.telemetry import build_impressions
+from app.services.impression_store import record_impressions
 from app.services.topic_expansion import (
     _is_expansion_candidate,
     _should_expand_topic,
@@ -39,6 +42,38 @@ from app.services.topic_expansion import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/feed", tags=["feed"])
+
+
+def _schedule_impressions(
+    background_tasks: BackgroundTasks,
+    clips: list[Clip],
+    *,
+    feed_surface: str,
+    session_id: str | None,
+    user_id: str | None,
+) -> None:
+    """Best-effort, non-blocking serve hook: build Impressions for the served,
+    ordered clip list and schedule the write as a BackgroundTask.
+
+    Wraps the whole build + schedule in try/except so that building or scheduling
+    Impressions can NEVER affect the already-prepared feed response — the feed is
+    returned regardless of any telemetry failure (Req 2.1, 2.2, 2.3). The serve
+    time is captured here as `datetime.now(timezone.utc)` and injected into the
+    pure `build_impressions` core, and the actual insert runs after the response
+    is sent via `record_impressions` (Req 1.1).
+    """
+    try:
+        impressions = build_impressions(
+            clips,
+            feed_surface=feed_surface,
+            session_id=session_id,
+            user_id=user_id,
+            served_at=datetime.now(timezone.utc),
+        )
+        if impressions:
+            background_tasks.add_task(record_impressions, impressions)
+    except Exception as e:
+        logger.warning(f"[feed] Failed to schedule impressions for surface={feed_surface}: {e}")
 
 
 @router.get("/path/{session_id}", response_model=list[FeedResponse])
@@ -238,7 +273,21 @@ async def get_path_feed(session_id: str, background_tasks: BackgroundTasks, call
         background_tasks.add_task(_extend_path, session_id)
         logger.info(f"[feed] session={session_id} low on clips ({total_unseen}); queued path extension")
 
-    return _interleave_topics(deduped_feeds)
+    # Serve hook (best-effort, non-blocking): the interleaved feeds are the final
+    # ordered set the learner sees. _interleave_topics returns FeedResponse objects,
+    # so flatten to the ordered Clip sequence for Feed_Position assignment. The
+    # session-ownership 403 check above already gates this; user_id is the resolved
+    # path owner.
+    served = _interleave_topics(deduped_feeds)
+    ordered_clips = [clip for feed in served for clip in feed.clips]
+    _schedule_impressions(
+        background_tasks,
+        ordered_clips,
+        feed_surface="learn_path",
+        session_id=session_id,
+        user_id=path.data[0].get("user_id"),
+    )
+    return served
 
 
 @router.get("/recommendations/{session_id}", response_model=list[TopicRecommendation])
@@ -402,6 +451,13 @@ async def get_discover_feed(user_id: str, background_tasks: BackgroundTasks, lim
     # Instant_Feed envelope: an empty feed signals the library has no level/
     # interest match yet and the background Per_User_Topup is generating content,
     # so the client can show a processing state instead of hanging (Req 5.6).
+    _schedule_impressions(
+        background_tasks,
+        clips,
+        feed_surface="discover",
+        session_id=None,
+        user_id=user_id,
+    )
     return DiscoverResponse(clips=clips, processing=len(clips) == 0)
 
 
