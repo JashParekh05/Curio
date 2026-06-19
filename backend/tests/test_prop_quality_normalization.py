@@ -43,21 +43,32 @@ class TestQualityNormalization:
         assert 0.0 <= result <= 1.0
         assert _is_rounded_2dp(result)
 
-        # Missing / non-numeric / NaN -> default 0.5 (Req 3.3).
-        is_numeric = isinstance(raw, (int, float)) and not isinstance(raw, bool)
-        is_nan = isinstance(raw, float) and math.isnan(raw)
-        if raw is None or not is_numeric or is_nan:
+        # "Numeric" means coercible to float, mirroring the implementation
+        # (float(raw) in a try/except). This intentionally accepts numeric
+        # *strings* like "0" or "0.5" -- model responses often stringify
+        # numbers -- so the oracle below coerces rather than branching on the
+        # Python type. Inputs that are None or not coercible to float default
+        # to 0.5 (Req 3.3).
+        if raw is None:
+            assert result == 0.5
+            return
+        try:
+            numeric = float(raw)
+        except (TypeError, ValueError):
+            assert result == 0.5
+            return
+        if math.isnan(numeric):
             assert result == 0.5
             return
 
-        # Numeric inputs: clamp out-of-range to the nearer bound (Req 3.4),
-        # otherwise round to 2 dp (Req 3.2).
-        if raw < 0.0:
+        # Numeric (incl. numeric strings): clamp out-of-range to the nearer
+        # bound (Req 3.4), otherwise round to 2 dp (Req 3.2).
+        if numeric < 0.0:
             assert result == 0.0
-        elif raw > 1.0:
+        elif numeric > 1.0:
             assert result == 1.0
         else:
-            assert result == round(raw, 2)
+            assert result == round(numeric, 2)
 
     @settings(max_examples=100)
     @given(
