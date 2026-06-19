@@ -38,6 +38,15 @@ services:
         sync: false
       - key: ALLOWED_ORIGINS
         sync: false
+      # Multi-project YouTube key pool (per-PROJECT 10k/day quota + failover).
+      # Comma-separated project_id:api_key pairs. When set, supersedes the single
+      # legacy YOUTUBE_API_KEY above. The seeding cron shares this same pool.
+      - key: YT_PROJECTS
+        sync: false
+      # Comma-separated Supabase user ids (JWT sub) allowed to read cross-user
+      # telemetry (engagement-telemetry). Empty = no operators.
+      - key: OPERATOR_USER_IDS
+        sync: false
 
   - type: cron
     name: edureel-seeding-worker
