@@ -3,8 +3,11 @@
 import { Suspense, useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
-import { getPathFeed, getTopicFeed, recordClipEvent, getRecommendations, type Clip, type FeedResponse, type TopicRecommendation } from "@/lib/api";
+import { getPathFeed, getTopicFeed, recordClipEvent, getRecommendations, getClipMetadata, type Clip, type FeedResponse, type TopicRecommendation } from "@/lib/api";
 import { flushClipEvent, type LastLogged } from "@/lib/clip-telemetry";
+import { computeWarmWindow, AHEAD, BEHIND } from "@/lib/warm-window";
+import { createOverlayCache, getOverlay, setOverlay, hasOverlay, deriveOverlay, type OverlayCache, type OverlayMetadata } from "@/lib/overlay-cache";
+import { isRefreshEligible, REFRESH_MIN_INTERVAL_MS } from "@/lib/refresh-eligibility";
 import { shareOrCopy, topicShareUrl } from "@/lib/share";
 import ReelPlayer from "@/components/ReelPlayer";
 import PlanPanel from "@/components/PlanPanel";
@@ -36,6 +39,9 @@ function FeedContent() {
   const [recommendations, setRecommendations] = useState<TopicRecommendation[]>([]);
   const [showPlan, setShowPlan] = useState(false);
   const [shareToast, setShareToast] = useState<string | null>(null);
+  // Bumped after a refresh-on-return replaces a cached overlay so the active
+  // caption re-renders from the updated Overlay_Cache entry.
+  const [overlayVersion, setOverlayVersion] = useState(0);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const pollingRef = useRef<NodeJS.Timeout | undefined>(undefined);
@@ -50,6 +56,15 @@ function FeedContent() {
   const fetchingMoreRef = useRef(false);
   const isGuestRef = useRef(isGuest);
   const lastLoggedRef = useRef<LastLogged | null>(null);
+  // In-memory Overlay_Cache scoped to this feed session (not persisted).
+  const overlayCacheRef = useRef<OverlayCache>(createOverlayCache());
+  // Kept in sync so the refresh-on-return handler (empty-dep effect) never
+  // closes over a stale topicLabels map.
+  const topicLabelsRef = useRef<Record<string, string>>({});
+  // Refresh-on-return bookkeeping: whether a Single_Clip_Refresh is in flight,
+  // and the last completed refresh time per clip id.
+  const refreshInFlightRef = useRef(false);
+  const lastRefreshAtRef = useRef<Record<string, number>>({});
   const loadFeed = useCallback(async () => {
     if (!session) return;
     try {
@@ -192,7 +207,7 @@ function FeedContent() {
   sessionIdRef.current = sessionId;
   sessionTokenRef.current = session?.access_token ?? "";
   isGuestRef.current = isGuest;
-
+  topicLabelsRef.current = topicLabels;
   const goTo = useCallback((idx: number) => {
     const clamped = Math.max(0, Math.min(clipsRef.current.length - 1, idx));
     const el = containerRef.current?.querySelectorAll("[data-index]")[clamped] as HTMLElement;
@@ -288,6 +303,51 @@ function FeedContent() {
     return () => window.removeEventListener("keydown", handleKey);
   }, [goTo]);
 
+  // Refresh-on-return: when the learner returns to the feed (tab re-focus or
+  // route re-entry), refresh ONLY the active clip's overlay metadata via a
+  // lightweight single-clip fetch. Gated by the pure isRefreshEligible so
+  // returns never cause overlapping or redundant requests. This never refetches
+  // the whole feed and never records watch telemetry. The separate
+  // visibilitychange->hidden telemetry flush above is independent and untouched.
+  useEffect(() => {
+    const onReturn = () => {
+      const clip = clipsRef.current[activeIndexRef.current];
+      const eligible = isRefreshEligible({
+        hasActiveClip: !!clip,
+        inFlight: refreshInFlightRef.current,
+        lastRefreshAt: clip ? (lastRefreshAtRef.current[clip.id] ?? null) : null,
+        now: Date.now(),
+        minIntervalMs: REFRESH_MIN_INTERVAL_MS,
+      });
+      if (!eligible || !clip) return;
+      refreshInFlightRef.current = true;
+      getClipMetadata(clip.id, sessionTokenRef.current)
+        .then((fresh) => {
+          if (!fresh) return; // 404 -> existing per-clip unavailable/skip path
+          setOverlay(
+            overlayCacheRef.current,
+            fresh.id,
+            deriveOverlay(fresh, topicLabelsRef.current[fresh.id] ?? topicSlug ?? ""),
+          );
+          setOverlayVersion((v) => v + 1); // re-render the active caption
+        })
+        .catch(() => {
+          // keep the existing overlay; the active clip stays playable
+        })
+        .finally(() => {
+          lastRefreshAtRef.current[clip.id] = Date.now();
+          refreshInFlightRef.current = false;
+        });
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") onReturn();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    onReturn(); // route re-entry: this effect mounts on entering the feed route
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Fetch more clips when 2 from the end (uses updated interest vector)
   useEffect(() => {
     if (sessionId && clips.length > 0 && activeIndex >= clips.length - 2) {
@@ -300,6 +360,29 @@ function FeedContent() {
     if (!sessionId || clips.length === 0 || activeIndex < clips.length - 1) return;
     getRecommendations(sessionId, session?.access_token ?? "").then(setRecommendations).catch(() => {});
   }, [activeIndex, clips.length, sessionId]);
+
+  // Bounded warm window of indices to mount as players around the active index.
+  const warmSet = useMemo(
+    () => new Set(computeWarmWindow(activeIndex, clips.length, AHEAD, BEHIND)),
+    [activeIndex, clips.length],
+  );
+
+  // Resolve a clip's Overlay_Metadata, caching it so revisiting a clip never
+  // re-derives or refetches. On a hit the cached value is returned directly (no
+  // network); on a miss it is derived from clip fields + topicLabels and stored.
+  // `overlayVersion` is a dep so a refresh-on-return that replaces a cache entry
+  // re-renders the active caption.
+  const resolveOverlay = useCallback(
+    (clip: Clip): OverlayMetadata => {
+      const cache = overlayCacheRef.current;
+      if (hasOverlay(cache, clip.id)) return getOverlay(cache, clip.id)!;
+      const meta = deriveOverlay(clip, topicLabels[clip.id] ?? topicSlug ?? "");
+      setOverlay(cache, clip.id, meta);
+      return meta;
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [topicLabels, topicSlug, overlayVersion],
+  );
 
   // Derive current topic name from active clip
   const activeClip = clips[activeIndex];
@@ -543,12 +626,13 @@ function FeedContent() {
             className="w-full relative snap-start snap-always"
             style={{ height: "100dvh" }}
           >
-            {i === activeIndex ? (
+            {warmSet.has(i) ? (
               <ReelPlayer
                 clip={clip}
-                active={true}
+                mode={i === activeIndex ? "active" : "warm"}
                 onEnded={() => goTo(i + 1)}
-                onFeedback={sessionId ? (type) => {
+                overlay={resolveOverlay(clip)}
+                onFeedback={i === activeIndex && sessionId ? (type) => {
                   recordClipEvent(clip.id, Date.now() - clipStartRef.current, false, sessionId, 0, type, session?.access_token ?? "");
                   if (type === "already_know") {
                     // Skip the current clip and stay within the topic. After a few
@@ -565,7 +649,12 @@ function FeedContent() {
                   }
                 } : undefined}
               />
-            ) : null}
+            ) : (
+              // Outside the warm window: a zero-cost placeholder that fills the
+              // same 100dvh section so snap layout and the IntersectionObserver
+              // target are preserved, but mounts no media element.
+              <div className="absolute inset-0 bg-black" aria-hidden />
+            )}
           </div>
         ))}
 

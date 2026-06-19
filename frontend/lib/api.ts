@@ -111,6 +111,19 @@ export async function getPathFeed(sessionId: string, token: string): Promise<Fee
   return res.json();
 }
 
+// Fetch a single clip's current metadata for an on-return refresh of the active
+// clip's overlay — no whole-feed refetch. Returns null on 404 so the caller can
+// surface the unavailable/skip path (Req 7.6); any other non-ok response throws
+// so the caller keeps the existing overlay and the clip stays playable (Req 7.4).
+export async function getClipMetadata(clipId: string, token: string): Promise<Clip | null> {
+  const res = await fetch(`${API_BASE}/api/feed/clip/${encodeURIComponent(clipId)}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error("Failed to fetch clip metadata");
+  return res.json();
+}
+
 export interface TopicRecommendation {
   slug: string;
   name: string;

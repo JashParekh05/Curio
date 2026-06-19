@@ -345,7 +345,7 @@ export default function DiscoverPage() {
             {i === activeIndex ? (
               <ReelPlayer
                 clip={clip}
-                active={true}
+                mode="active"
                 onEnded={() => goTo(i + 1)}
                 onFeedback={(type) => recordClipEvent(clip.id, 0, false, null, 0, type, sessionTokenRef.current)}
               />

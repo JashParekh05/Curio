@@ -314,6 +314,34 @@ async def get_recommendations(session_id: str, caller_id: str = Depends(require_
     return await asyncio.to_thread(run_recommendations, session_id, path_slugs)
 
 
+@router.get("/clip/{clip_id}", response_model=Clip)
+async def get_clip(clip_id: str, caller_id: str = Depends(require_user)):
+    """Single-clip metadata source for refresh-on-return: return current metadata
+    for exactly one clip. Auth via require_user like every other feed route. 404
+    when the clip no longer exists so the client surfaces the unavailable state.
+
+    Declared BEFORE `/{topic_slug}` so the literal `clip/` segment is never
+    captured as a topic slug.
+    """
+    db = get_client()
+    try:
+        result = (
+            db.table("clips")
+            .select("id,topic_slug,title,description,video_url,thumbnail_url,duration_seconds,source_url,source_platform,hook_score,created_at,section_index")
+            .eq("id", clip_id)
+            .limit(1)
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"[feed] Failed to fetch clip {clip_id}: {e}")
+        raise HTTPException(status_code=503, detail="Clip lookup failed")
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Clip not found")
+    row = result.data[0]
+    row.setdefault("hook_score", 0.5)
+    return Clip(**row)
+
+
 @router.get("/{topic_slug}", response_model=FeedResponse)
 async def get_feed(
     topic_slug: str,
