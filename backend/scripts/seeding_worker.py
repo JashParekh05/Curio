@@ -286,6 +286,13 @@ def run_once(per_run_cap: int = DEFAULT_PER_RUN_CAP,
     charged_units = 0
     stopped_reason = _STOP_EMPTY
 
+    # Seed the Topic_Frontier from the grade x interest matrix on first run.
+    # init_from_grade_map is idempotent (it no-ops once topic_backlog has any
+    # row) and best-effort, so calling it every run is safe and cheap; without
+    # it the backlog would start empty and the worker would do nothing. After the
+    # first seed, adjacency spawning on successful items grows the backlog.
+    backlog_store.init_from_grade_map()
+
     # I/O reads up front; both fail closed/degrade to empty (no spend) on error.
     projects: list[ProjectQuota] = quota_store.load_today(now_utc)
     working: list[BacklogItem] = backlog_store.load_pending()

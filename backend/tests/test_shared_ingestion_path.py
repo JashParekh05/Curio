@@ -203,6 +203,7 @@ class TestPerJobIsolation:
             return _summary(slug, stored=2)
 
         monkeypatch.setattr(ip, "ingest_topic", fake_ingest)
+        monkeypatch.setattr(sw.backlog_store, "init_from_grade_map", lambda: None)
         monkeypatch.setattr(sw.quota_store, "load_today", lambda now_utc=None: list(projects))
         monkeypatch.setattr(sw.backlog_store, "load_pending", lambda: list(pending))
         monkeypatch.setattr(
