@@ -6,33 +6,43 @@ import {
   getGuestClips,
   isGateDismissed,
   dismissGate,
+  isHardGated,
   GUEST_GATE_THRESHOLD,
   GUEST_CLIP_EVENT,
 } from "@/lib/guest-progress";
 import UpgradeModal from "./UpgradeModal";
 
-// Non-blocking soft signup gate. Mounted once at the app root so it covers every
-// screen. Shows a dismissible banner after a guest has watched enough clips, and
-// opens the in-place account upgrade. Watching is never interrupted.
+// Non-blocking soft signup gate + hard wall. Mounted once at the app root so it
+// covers every screen. After a few clips a guest sees a dismissible nudge banner;
+// after the hard limit, a non-dismissible modal blocks further watching until they
+// create an account. Their progress carries over (same user_id on upgrade).
 export default function GuestGate() {
   const { isGuest } = useAuth();
   const [show, setShow] = useState(false);
+  const [hardGated, setHardGated] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
 
   useEffect(() => {
     if (!isGuest) {
       setShow(false);
+      setHardGated(false);
       return;
     }
-    const evaluate = () => setShow(!isGateDismissed() && getGuestClips() >= GUEST_GATE_THRESHOLD);
+    const evaluate = () => {
+      const clips = getGuestClips();
+      setHardGated(isHardGated());
+      setShow(!isGateDismissed() && clips >= GUEST_GATE_THRESHOLD);
+    };
     evaluate();
     // The clip counter is bumped from telemetry (not React state); this event
-    // lets the banner appear the moment the threshold is crossed.
+    // lets the banner/wall appear the moment a threshold is crossed.
     window.addEventListener(GUEST_CLIP_EVENT, evaluate);
     return () => window.removeEventListener(GUEST_CLIP_EVENT, evaluate);
   }, [isGuest]);
 
-  const showBanner = isGuest && show && !modalOpen;
+  // Hard wall takes precedence over the dismissible banner.
+  const showBanner = isGuest && show && !hardGated && !modalOpen;
+  const showWall = isGuest && hardGated;
 
   return (
     <>
@@ -63,8 +73,13 @@ export default function GuestGate() {
         </div>
       )}
       {/* Kept mounted independent of isGuest so the success screen survives the
-          guest→account flip that happens on a successful upgrade. */}
-      <UpgradeModal open={modalOpen} onClose={() => setModalOpen(false)} />
+          guest→account flip that happens on a successful upgrade. The hard wall
+          forces the modal open in non-dismissible "blocking" mode. */}
+      <UpgradeModal
+        open={modalOpen || showWall}
+        blocking={showWall}
+        onClose={() => setModalOpen(false)}
+      />
     </>
   );
 }
