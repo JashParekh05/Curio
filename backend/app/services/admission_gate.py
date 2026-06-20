@@ -296,6 +296,7 @@ def persist_admitted(
     admitted: "list[MappedSegment]",
     topic_slug: str,
     coherence_score: float,
+    provider_provenance: "dict[str, str] | None" = None,
 ) -> int:
     """Persist each Admitted_Clip with the on-demand pipeline's field set.
 
@@ -312,6 +313,24 @@ def persist_admitted(
       - ``coherence_score``  -> the topic-level Coherence_Score (mirrored
         per clip, exactly like the on-demand coherence pass in ``topics.py``).
 
+    Provider_Provenance (Req 8.1): when ``provider_provenance`` is supplied --
+    as it is by the multi-provider ``ingest_topic`` path -- each persisted clip
+    additionally carries the new ``clips`` provenance columns from
+    ``migration_alt_streams.sql`` so the originating Content_Provider is
+    retrievable for every admitted Clip:
+
+      - ``provider_id`` -> the originating Provider_Id, looked up by the atom's
+        external item id (the Source_Video id); defaults to ``'youtube'`` when
+        unknown so the YouTube-only path stays behavior-preserving,
+      - ``external_id`` -> the provider's external item identifier (the atom's
+        ``video_id``), persisted NON-EMPTY (Req 8.1),
+      - ``content_id``  -> the cross-provider dedup key; ``None`` at this layer
+        (no cross-provider content id is resolved during acquisition).
+
+    When ``provider_provenance`` is ``None`` (legacy callers / the
+    deep-content-ingestion tests) the persisted field set is exactly the
+    pre-feature on-demand + metadata set, byte-identical to before.
+
     Each candidate clip is run through ``arc_assembler.validate_clip`` (the same
     normalisation/exclusion gate the on-demand path uses) before insertion; a
     clip the validator rejects is logged and skipped, never stored.
@@ -324,11 +343,15 @@ def persist_admitted(
         admitted: The Admitted_Clips' Mapped_Segments (output of ``admit_topic``).
         topic_slug: The Topic these clips belong to.
         coherence_score: The topic-level Coherence_Score to mirror per clip.
+        provider_provenance: Optional map of external item id -> Provider_Id for
+            the Source_Items acquired this run. When provided, each clip is
+            stamped with its Provider_Provenance columns (Req 8.1); when ``None``
+            the legacy field set is written unchanged.
 
     Returns:
         The count of clips actually stored.
 
-    Requirements: 4.4, 7.2
+    Requirements: 4.4, 7.2, 8.1
     """
     if not admitted:
         return 0
@@ -418,6 +441,20 @@ def persist_admitted(
                 "concept_label": validated.concept_label,
                 "coherence_score": validated.coherence_score,
             }
+
+            # Provider_Provenance (Req 8.1): stamp the originating Content_Provider
+            # onto the clip when the caller supplied a provenance map. The
+            # external item id is the atom's Source_Video id (NON-EMPTY); the
+            # Provider_Id is looked up by that id and defaults to 'youtube' so the
+            # YouTube-only path is behavior-preserving. content_id is the
+            # cross-provider dedup key, unresolved at this layer (None).
+            if provider_provenance is not None:
+                external_id = (atom.video_id or "").strip()
+                row["provider_id"] = provider_provenance.get(
+                    external_id, "youtube"
+                )
+                row["external_id"] = external_id
+                row["content_id"] = None
 
             db.table("clips").insert(row).execute()
             stored += 1

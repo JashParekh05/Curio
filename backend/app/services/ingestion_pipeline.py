@@ -51,6 +51,7 @@ from app.services import (
     ingestion_store,
     segment_judge,
     segment_mapper,
+    source_acquirer,
     youtube,
 )
 from app.services.admission_gate import Funnel, TopicOutcome
@@ -64,10 +65,12 @@ from app.services.ingestion_state import (
     next_stage,
     validate_fast_preview_limit,
 )
+from app.services.provider_registry import ProviderRecord, Registry
 from app.services.segment_judge import (
     DEFAULT_QUALITY_THRESHOLD,
     validate_quality_threshold,
 )
+from app.services.source_selection import ProviderAvailability
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +80,11 @@ _DEFERRED: Literal["deferred"] = "deferred"
 # Deferral reasons surfaced when youtube_search declines to spend (Req 8.6, 8.7).
 _REASON_INSUFFICIENT_QUOTA = "insufficient_quota"
 _REASON_EMPTY_KEY_POOL = "empty_key_pool"
+
+#: Maximum candidate Source_Items requested per provider search. Comfortably
+#: above the count ``youtube.youtube_search`` returns (<=6) so the YouTube-only
+#: default truncates nothing and processes every returned Source_Video.
+DEFAULT_MAX_SOURCE_ITEMS = 10
 
 
 @dataclass(frozen=True)
@@ -159,7 +167,7 @@ def _collect_topic_clip_ids(topic_slug: str, limit: int | None = None) -> set[st
 
 
 def _defer_reason() -> str:
-    """Classify why ``youtube_search`` declined to spend (Req 8.6, 8.7).
+    """Classify why source acquisition declined to spend (Req 8.6, 8.7).
 
     An empty Operator-provisioned Key_Pool -> ``'empty_key_pool'``; otherwise the
     pool has keys but none can currently afford the call -> ``'insufficient_quota'``.
@@ -175,6 +183,76 @@ def _defer_reason() -> str:
             "[ingestion_pipeline] could not inspect Key_Pool config: %s", exc
         )
     return _REASON_INSUFFICIENT_QUOTA
+
+
+def _acquire_source_items(
+    topic_name: str,
+    *,
+    now_utc: datetime | None = None,
+) -> source_acquirer.AcquisitionResult:
+    """Acquire Source_Items for a Topic through the Content_Provider abstraction.
+
+    Routes source acquisition through ``source_acquirer.acquire_sources`` instead
+    of calling ``youtube.youtube_search`` directly (Req 5.1, 5.2). The default
+    Provider_Registry contains exactly one registered, enabled provider -- the
+    behavior-preserving ``YouTubeProvider`` -- so with YouTube as the only enabled
+    provider the acquirer's single call path is the YouTube provider wrapping
+    ``youtube.youtube_search`` and today's behavior is preserved:
+
+      - the YouTube provider is marked available with a budget at its Key_Pool
+        ``Spend_Budget``, so Source_Selection always selects it; the actual quota
+        fail-closed still happens at the single charge site inside
+        ``youtube_search`` (cache-first, charge-before-call against the Key_Pool);
+      - ``youtube`` is listed as a ``self_charging_provider`` so the acquirer does
+        NOT charge it again via ``charge_before_call`` and never duplicates the
+        Key_Pool counter (Req 7.5);
+      - ``retries`` is 1 because ``youtube_search`` already fails over across
+        Google Cloud projects internally, so the acquirer must not re-invoke it
+        and re-charge a successful-but-empty search.
+
+    The returned ``Source_Item``s carry ``provider_id == 'youtube'`` and an
+    ``Embed_Reference`` whose ``external_id`` is the video id; the unchanged
+    ``ingest_topic`` decode stage consumes them by id. Best-effort:
+    ``acquire_sources`` never raises.
+
+    Args:
+        topic_name: The human-readable Topic name used as the provider search query.
+        now_utc: Optional injected clock threaded to the provider charge site.
+
+    Returns:
+        The ``AcquisitionResult`` with normalized, de-duplicated Source_Items.
+
+    Validates: Requirements 5.1, 5.2, 5.3, 8.1
+    """
+    from app.providers.youtube_provider import YouTubeProvider
+
+    provider = YouTubeProvider()
+    record = ProviderRecord(
+        provider_id=provider.provider_id,
+        enabled=True,
+        capabilities=provider.capabilities,
+        cost_policy=provider.cost_policy,
+    )
+    registry = Registry(records=(record,))
+    providers = {provider.provider_id: provider}
+    availability = {
+        provider.provider_id: ProviderAvailability(
+            provider_id=provider.provider_id,
+            remaining_budget=provider.cost_policy.spend_budget,
+            available=True,
+        )
+    }
+
+    return source_acquirer.acquire_sources(
+        registry,
+        topic_name,
+        availability,
+        providers,
+        max_results=DEFAULT_MAX_SOURCE_ITEMS,
+        retries=1,
+        self_charging_providers=frozenset({provider.provider_id}),
+        now_utc=now_utc,
+    )
 
 
 def ingest_topic(
@@ -261,13 +339,42 @@ def ingest_topic(
                 exc,
             )
 
-        # 3. Select Source_Videos through the single YouTube charge site. A
-        #    cache hit costs 0 units; on a miss it charges before calling. None
-        #    means nothing affordable / empty pool -> DEFER, pool untouched
-        #    (Req 8.1-8.8).
-        videos = youtube.youtube_search(topic_name, now_utc=now_utc)
-        if videos is None:
-            reason = _defer_reason()
+        # 3. Acquire Source_Items through the Content_Provider abstraction.
+        #    Source acquisition now routes through source_acquirer.acquire_sources
+        #    rather than calling youtube.youtube_search directly, so NO
+        #    YouTube-specific call remains in the pipeline (Req 5.1, 5.2). With
+        #    YouTube as the only enabled provider the acquirer's single call path
+        #    is the YouTubeProvider wrapping youtube.youtube_search, so behavior is
+        #    preserved: cache-first, charge-before-call at the single Key_Pool
+        #    charge site, and a deferral when nothing is affordable. The resulting
+        #    transcript-ready Source_Items feed the unchanged decode stage by id;
+        #    nothing is admitted by any path that bypasses this pipeline (Req 5.3).
+        acquisition = _acquire_source_items(topic_name, now_utc=now_utc)
+        videos = [
+            {"video_id": item.embed_ref.external_id, **item.metadata}
+            for item in acquisition.items
+        ]
+
+        # Provider_Provenance map (Req 8.1): external item id -> originating
+        # Provider_Id, derived from the acquired Source_Items. Passed to
+        # persist_admitted so every admitted Clip carries its provenance. For the
+        # YouTube-only path every entry is 'youtube'.
+        provenance_by_external_id = {
+            item.embed_ref.external_id: item.provider_id
+            for item in acquisition.items
+        }
+
+        if not videos:
+            # No Source_Items: either a Source_Selection-level deferral (no
+            # enabled / no search-capable / insufficient provider budget) or the
+            # YouTube charge site declined to spend / returned no candidates.
+            # Either way nothing is admitted and the Key_Pool counters are
+            # untouched; classify the deferral reason (Req 3.5, 6.3, 6.7, 8.6, 8.7).
+            reason = (
+                acquisition.defer_reason
+                if acquisition.defer_reason is not None
+                else _defer_reason()
+            )
             logger.info(
                 "[ingestion_pipeline] ingestion deferred for '%s': %s",
                 topic_slug,
@@ -279,20 +386,6 @@ def ingest_topic(
                 funnels=funnels,
                 stored=0,
                 deferred_reason=reason,
-            )
-
-        if not videos:
-            # A successful but empty search: nothing to ingest, nothing admitted.
-            logger.info(
-                "[ingestion_pipeline] no Source_Videos for '%s'; nothing to ingest",
-                topic_slug,
-            )
-            return IngestionSummary(
-                topic_slug=topic_slug,
-                outcome="skipped",
-                funnels=funnels,
-                stored=0,
-                deferred_reason=None,
             )
 
         # 4-6. Per Source_Video pipeline, budget-bounded, with Fast_Preview ->
@@ -375,7 +468,7 @@ def ingest_topic(
                     mapped, unmapped, verdicts, coherent, aligned
                 )
                 stored = admission_gate.persist_admitted(
-                    admitted, topic_slug, coherence_score
+                    admitted, topic_slug, coherence_score, provenance_by_external_id
                 )
 
                 total_stored += stored
