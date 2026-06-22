@@ -49,6 +49,10 @@ export default function PlacementScreen({
 }) {
   const [questions, setQuestions] = useState<QuizQuestion[]>([]);
   const [loading, setLoading] = useState(true);
+  // True while the backend is still generating the diagnostic on a cold start
+  // (no `pre` questions cached yet). Shows a "building" state with Skip instead
+  // of silently entering the feed, so first-run placement actually appears.
+  const [building, setBuilding] = useState(false);
   const [answers, setAnswers] = useState<Record<string, AnswerState>>({});
   const [submitting, setSubmitting] = useState(false);
   // Guards onEnterFeed against being called more than once (e.g. an empty-result
@@ -69,29 +73,53 @@ export default function PlacementScreen({
     return topics[entryIndex]?.slug ?? null;
   }
 
-  // Fetch the diagnostic once on mount. An empty result means there's nothing to
-  // ask (yet) — skip the screen entirely and enter the feed as today.
+  // Fetch the diagnostic on mount, polling while the backend generates it on a
+  // cold start. The first call to GET /api/placement/{session}/questions kicks
+  // off background generation and returns [] until questions are cached; we poll
+  // a bounded number of times (showing a "building" state) and only fall through
+  // to entering the feed once questions arrive, the learner skips, or the budget
+  // is exhausted. This makes first-run placement appear instead of silently
+  // skipping, while never blocking the request path or the scroll.
   useEffect(() => {
     if (!token) {
       enterFeed(null);
       return;
     }
     let cancelled = false;
-    getPlacementQuestions(sessionId, token)
-      .then((qs) => {
-        if (cancelled) return;
-        if (qs.length === 0) {
-          enterFeed(null);
-          return;
-        }
+    let attempts = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const POLL_MS = 3000;
+    const MAX_ATTEMPTS = 8; // ~24s budget; first topic's questions usually land by ~2-3 polls
+
+    async function load() {
+      let qs: QuizQuestion[] = [];
+      try {
+        qs = await getPlacementQuestions(sessionId, token);
+      } catch {
+        qs = [];
+      }
+      if (cancelled) return;
+      if (qs.length > 0) {
         setQuestions(qs);
+        setBuilding(false);
         setLoading(false);
-      })
-      .catch(() => {
-        if (!cancelled) enterFeed(null);
-      });
+        return;
+      }
+      attempts += 1;
+      if (attempts >= MAX_ATTEMPTS) {
+        // Nothing generated in time -- enter the feed unseeded (no regression).
+        enterFeed(null);
+        return;
+      }
+      // Still generating: show the building state and poll again.
+      setBuilding(true);
+      timer = setTimeout(load, POLL_MS);
+    }
+
+    load();
     return () => {
       cancelled = true;
+      if (timer) clearTimeout(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, token]);
@@ -122,12 +150,28 @@ export default function PlacementScreen({
     enterFeed(slugForEntry(result?.entry_index ?? null));
   }
 
-  // While the diagnostic is loading (or we're about to auto-enter on empty),
-  // show a lightweight spinner rather than flashing an empty screen.
+  // While the diagnostic loads / is still being generated, show a building state
+  // with Skip always available (never a dead-end spinner).
   if (loading) {
     return (
-      <div className="fixed inset-0 bg-paper flex items-center justify-center">
+      <div className="fixed inset-0 bg-paper text-ink flex flex-col items-center justify-center gap-5 px-6">
         <div className="w-12 h-12 border-[3px] border-ink border-t-accent-pink rounded-full animate-spin" />
+        {building ? (
+          <>
+            <div className="text-center space-y-1">
+              <p className="font-extrabold">Building your quick placement...</p>
+              <p className="text-ink/60 text-sm font-medium">
+                A few questions to start you at the right level.
+              </p>
+            </div>
+            <button
+              onClick={() => enterFeed(null)}
+              className="brutal-btn bg-white text-ink px-6 py-3 text-sm"
+            >
+              Skip and start watching
+            </button>
+          </>
+        ) : null}
       </div>
     );
   }
