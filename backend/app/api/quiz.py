@@ -6,6 +6,7 @@ from pydantic import BaseModel
 
 from app.auth import require_user
 from app.db.supabase import get_client
+from app.services import stage_anchor
 from app.services.quiz import generate_and_store_questions, grade, points_for, summarize_mastery
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,41 @@ def _topic_questions(topic_slug: str) -> list[dict]:
     except Exception as e:
         logger.warning(f"[quiz] failed to load questions for '{topic_slug}': {e}")
         return []
+    return res.data or []
+
+
+def _anchored_topic_questions(topic_slug: str, anchor: stage_anchor.QuestionAnchor) -> list[dict]:
+    """Cached MCQs for a topic, scoped to a normalized stage/section anchor.
+
+    A ``check`` is beat-anchored, so its questions are filtered to the matching
+    ``(stage, section_index)`` beat; a ``pre`` / ``post`` is topic-wide, so only
+    the ``stage`` is matched (``section_index`` is ``None`` for those). Selects
+    the same columns as :func:`_topic_questions` so the client grades/reveals
+    identically.
+
+    Graceful (Req 4.3, 5.3): the ``stage`` / ``section_index`` columns are
+    additive (Phase 2 migration) and may be absent in the DB. When the filtered
+    select errors (columns missing), this degrades to the existing topic-wide
+    read so nothing breaks and the endpoint stays backward compatible.
+    """
+    db = get_client()
+    try:
+        q = (
+            db.table("quiz_questions")
+            .select("id,question,options,correct_index,explanation")
+            .eq("topic_slug", topic_slug)
+            .eq("stage", anchor.stage)
+        )
+        if anchor.section_index is not None:
+            q = q.eq("section_index", anchor.section_index)
+        res = q.execute()
+    except Exception as e:
+        logger.warning(
+            f"[quiz] anchored question load failed for '{topic_slug}' "
+            f"(stage/section_index columns may be absent); degrading to "
+            f"topic-wide read: {e}"
+        )
+        return _topic_questions(topic_slug)
     return res.data or []
 
 
@@ -100,12 +136,34 @@ async def get_mastery(user_id: str, caller_id: str = Depends(require_user)):
 
 
 @router.get("/{topic_slug}")
-async def get_quiz(topic_slug: str, background_tasks: BackgroundTasks, caller_id: str = Depends(require_user)):
+async def get_quiz(
+    topic_slug: str,
+    background_tasks: BackgroundTasks,
+    stage: str | None = None,
+    section_index: int | None = None,
+    caller_id: str = Depends(require_user),
+):
     """Cached MCQs for a topic, including correct_index + explanation so the
     client can grade and reveal instantly. When none exist yet but the topic
     has clips, kick off generation in the background (lazy self-heal) so the
-    quiz shows up automatically on a later poll. Empty list in the meantime."""
-    questions = await asyncio.to_thread(_topic_questions, topic_slug)
+    quiz shows up automatically on a later poll. Empty list in the meantime.
+
+    Stage anchoring (Stage_Anchor shell, Req 2.2): when ``stage`` is supplied,
+    the anchor is normalized via ``stage_anchor.normalize_anchor`` and the
+    returned questions are scoped to it -- a ``check`` returns that beat's
+    questions (``section_index`` 0..3), while a ``pre`` / ``post`` returns the
+    topic-wide questions for that stage. When the additive ``stage`` /
+    ``section_index`` columns are absent, the read degrades to the topic-wide
+    behavior (Req 4.3).
+
+    Default behavior (no ``stage`` query param) is unchanged: every cached
+    question for the topic is returned exactly as before (backward compatible).
+    """
+    if stage is None:
+        questions = await asyncio.to_thread(_topic_questions, topic_slug)
+    else:
+        anchor = stage_anchor.normalize_anchor(stage, section_index)
+        questions = await asyncio.to_thread(_anchored_topic_questions, topic_slug, anchor)
     if not questions:
         await asyncio.to_thread(_maybe_self_heal, topic_slug, background_tasks)
     return questions

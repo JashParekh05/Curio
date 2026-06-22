@@ -10,22 +10,18 @@ import {
   type TopicSection,
   type QuizQuestion,
   type QuizMastery,
+  type ProgressTopic,
 } from "@/lib/api";
+import {
+  QuizQuestionList,
+  pointsFor,
+  type AnswerState,
+} from "@/components/SoftCheckpointCard";
 
 export interface PlanTopic {
   slug: string;
   name: string;
 }
-
-// Mirror the server's points_for so the optimistic score matches what's stored.
-const POINTS_PER_CORRECT = 10;
-const STREAK_BONUS_PER = 5;
-const MAX_STREAK_BONUS = 40;
-function pointsFor(streak: number): number {
-  return POINTS_PER_CORRECT + Math.min(Math.max(0, streak) * STREAK_BONUS_PER, MAX_STREAK_BONUS);
-}
-
-type AnswerState = { chosen: number; correct: boolean };
 
 /**
  * Study panel: the learning plan (notes) plus an optional, gamified MCQ quiz per
@@ -40,6 +36,7 @@ export default function PlanPanel({
   activeSlug,
   sessionId,
   onJump,
+  progressTopics,
 }: {
   open: boolean;
   onClose: () => void;
@@ -47,6 +44,10 @@ export default function PlanPanel({
   activeSlug: string;
   sessionId: string | null;
   onJump: (slug: string, sectionIndex: number | null) => void;
+  // Real per-topic mastery from GET /api/progress, keyed by topic slug (task
+  // 19.1). When present it drives the MASTERED / NEXT UP badges; when absent the
+  // panel falls back to the quiz-mastery signal so there is no regression.
+  progressTopics?: Record<string, ProgressTopic>;
 }) {
   const { user, session } = useAuth();
   const token = session?.access_token ?? "";
@@ -141,19 +142,13 @@ export default function PlanPanel({
 
   if (!open) return null;
 
-  const totalScore = (mastery?.total_points ?? 0) + scoreDelta;
-  const masteredCount = mastery
-    ? topics.filter((t) => mastery.topics[t.slug]?.mastered).length
-    : 0;
+  // Prefer the real progress map for mastery; fall back to the quiz-mastery
+  // signal when progress is unavailable (no regression).
+  const isTopicMastered = (slug: string): boolean =>
+    progressTopics ? !!progressTopics[slug]?.mastered : !!mastery?.topics[slug]?.mastered;
 
-  // Brutalist option states: thick borders, flat fills, no rounding.
-  function optionClass(q: QuizQuestion, i: number): string {
-    const a = answers[q.id];
-    if (!a) return "border-ink bg-white text-ink hover:bg-accent-yellow hover:-translate-y-[1px] hover:shadow-brutal-sm";
-    if (i === q.correct_index) return "border-ink bg-accent-lime text-ink font-bold";
-    if (i === a.chosen) return "border-ink bg-accent-pink text-white font-bold";
-    return "border-ink/30 bg-white/40 text-ink/40";
-  }
+  const totalScore = (mastery?.total_points ?? 0) + scoreDelta;
+  const masteredCount = topics.filter((t) => isTopicMastered(t.slug)).length;
 
   return (
     <div className="absolute inset-0 z-40 flex">
@@ -208,9 +203,11 @@ export default function PlanPanel({
                   {qs.length > 0 && (
                     <span className="text-ink/60 text-xs font-bold tabular-nums shrink-0">{correctCount}/{qs.length}</span>
                   )}
-                  {mastery?.topics[topic.slug]?.mastered && (
+                  {isTopicMastered(topic.slug) ? (
                     <span className="brutal bg-accent-lime text-ink text-[10px] font-black px-1.5 py-0.5 shrink-0">MASTERED</span>
-                  )}
+                  ) : progressTopics?.[topic.slug]?.unlock === "recommended" ? (
+                    <span className="brutal bg-accent-orange text-ink text-[10px] font-black px-1.5 py-0.5 shrink-0">NEXT UP</span>
+                  ) : null}
                   <button
                     onClick={() => toggle(topic.slug)}
                     className="text-ink font-black text-sm px-1.5 py-1"
@@ -251,30 +248,8 @@ export default function PlanPanel({
                         {qs.length === 0 ? (
                           <div className="px-4 pb-3 text-ink/50 text-xs font-medium">Building your quiz...</div>
                         ) : (
-                          <div className="px-4 pb-3 space-y-3">
-                            {qs.map((q) => {
-                              const a = answers[q.id];
-                              return (
-                                <div key={q.id} className="space-y-1.5">
-                                  <p className="text-ink text-xs font-bold">{q.question}</p>
-                                  {q.options.map((opt, oi) => (
-                                    <button
-                                      key={oi}
-                                      disabled={!!a}
-                                      onClick={() => answer(q, oi)}
-                                      className={`w-full text-left text-xs px-3 py-2 border-2 rounded-none font-medium transition-all duration-75 ${optionClass(q, oi)}`}
-                                    >
-                                      {opt}
-                                    </button>
-                                  ))}
-                                  {a && (
-                                    <p className="brutal bg-white text-ink text-[11px] font-medium px-2 py-1.5 mt-1">
-                                      {q.explanation}
-                                    </p>
-                                  )}
-                                </div>
-                              );
-                            })}
+                          <div className="px-4 pb-3">
+                            <QuizQuestionList questions={qs} answers={answers} onAnswer={answer} />
                           </div>
                         )}
                       </>

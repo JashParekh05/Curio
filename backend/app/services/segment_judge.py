@@ -156,8 +156,8 @@ def judge_verdict(
 # ---------------------------------------------------------------------------
 
 # Reuse the on-demand pipeline's model so the judge stays consistent with the
-# rest of the ingestion path (mirrors coherence.MODEL).
-MODEL = "gpt-4o-mini"
+# rest of the ingestion path. Resolved through the central llm.resolve_model
+# helper at the call site (strong tier for this hardest reasoning step).
 
 _VALID_FITS: frozenset[str] = frozenset(("belongs", "off_role"))
 
@@ -241,11 +241,11 @@ def judge_segment(
     for attempt in range(attempts):
         try:
             # Lazily reuse the existing OpenAI client from the LLM module.
-            from app.services.llm import get_client
+            from app.services.llm import get_client, resolve_model
 
             client = get_client()
             response = client.chat.completions.create(
-                model=MODEL,
+                model=resolve_model("strong"),
                 max_tokens=256,
                 messages=[{"role": "user", "content": prompt}],
                 timeout=timeout_s,

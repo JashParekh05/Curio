@@ -10,9 +10,10 @@ Design ref: .kiro/specs/active-learning-quiz/design.md
 import json
 import logging
 
+from app.services import llm, stage_anchor
+
 logger = logging.getLogger(__name__)
 
-MODEL = "gpt-4o-mini"
 QUESTIONS_PER_TOPIC = 3        # target MCQs to keep per topic
 GENERATION_POOL = 6           # candidates to generate (the judge rejects some)
 _TRANSCRIPT_BUDGET = 2000      # chars of source excerpt fed to generation
@@ -175,7 +176,7 @@ def _generate_questions(topic_name: str, sections: list[dict], transcripts: list
     (callers handle that). Output is NOT yet validated/judged."""
     prompt = _build_question_prompt(topic_name, sections, transcripts, n)
     resp = _client().chat.completions.create(
-        model=MODEL, max_tokens=1200, temperature=0.4,
+        model=llm.resolve_model(), max_tokens=1200, temperature=0.4,
         messages=[{"role": "user", "content": prompt}],
     )
     parsed = json.loads(_strip_json(resp.choices[0].message.content))
@@ -199,7 +200,7 @@ Mark "ok": false if ANY of these is true:
 
 Return ONLY JSON: {{"ok": true, "issue": "<one line; empty when ok>"}}"""
     resp = _client().chat.completions.create(
-        model=MODEL, max_tokens=200, temperature=0,
+        model=llm.resolve_model(), max_tokens=200, temperature=0,
         messages=[{"role": "user", "content": prompt}],
     )
     verdict = json.loads(_strip_json(resp.choices[0].message.content))
@@ -230,11 +231,30 @@ def _vet_questions(topic_name: str, raw_questions: list) -> list[dict]:
 MAX_GENERATION_ATTEMPTS = 2    # batches to try before giving up on a topic
 
 
-def generate_and_store_questions(topic_slug: str, topic_name: str) -> int:
+def generate_and_store_questions(
+    topic_slug: str,
+    topic_name: str,
+    stage: str | None = None,
+    section_index: int | None = None,
+) -> int:
     """Generation-time entrypoint: produce vetted MCQs for a topic and cache
     them. Idempotent (skips if questions already exist) and best-effort (any
     LLM/DB failure is logged and skipped, never raised) so it can never block
     clip delivery. Returns the number of questions stored.
+
+    Stage anchoring (Stage_Anchor shell, Req 2.2): when ``stage`` is supplied,
+    the question is normalized via ``stage_anchor.normalize_anchor`` and given a
+    ``stage`` + ``section_index`` anchor. A ``check`` is beat-anchored
+    (``transcript_scope == "beat"``) so it is generated from ONLY the
+    transcripts of clips in that beat; a ``pre`` / ``post`` is topic-wide
+    (``"topic"``) and uses the whole-topic transcripts. The anchor is persisted
+    onto each ``quiz_questions`` row.
+
+    Backward compatible (Req 5.3): callers that pass no ``stage`` keep the
+    original topic-wide behavior exactly -- whole-topic transcripts, and no
+    ``stage`` / ``section_index`` written, so the additive Phase 2 columns fall
+    back to their defaults (``stage`` default ``'check'``, ``section_index``
+    NULL -> a legacy topic-wide check) with no backfill.
 
     This is the only DB-touching function in the module; the judging/scoring
     logic above stays pure and unit-testable.
@@ -242,10 +262,32 @@ def generate_and_store_questions(topic_slug: str, topic_name: str) -> int:
     from app.db.supabase import get_client
     db = get_client()
 
-    # Idempotent: skip topics that already have cached questions.
+    # Resolve the anchor only when a stage was explicitly requested. Legacy
+    # callers (stage is None) stay topic-wide and un-anchored, exactly as before.
+    anchor = stage_anchor.normalize_anchor(stage, section_index) if stage is not None else None
+    beat_scoped = anchor is not None and stage_anchor.transcript_scope(anchor) == "beat"
+
+    # Idempotent: skip when matching questions are already cached. An anchored
+    # run scopes the check to its (stage, section_index); if those additive
+    # columns are absent the filtered query raises, so we degrade to the
+    # topic-wide existence check (best-effort, never blocks).
     try:
-        existing = db.table("quiz_questions").select("id").eq("topic_slug", topic_slug).limit(1).execute()
-        if existing.data:
+        existing_q = db.table("quiz_questions").select("id").eq("topic_slug", topic_slug)
+        if anchor is not None:
+            try:
+                scoped = existing_q.eq("stage", anchor.stage)
+                if anchor.section_index is not None:
+                    scoped = scoped.eq("section_index", anchor.section_index)
+                if scoped.limit(1).execute().data:
+                    return 0
+            except Exception as exc:
+                logger.warning(
+                    f"[quiz] anchored existence check failed for '{topic_slug}' "
+                    f"(columns may be absent); degrading to topic-wide check: {exc}"
+                )
+                if db.table("quiz_questions").select("id").eq("topic_slug", topic_slug).limit(1).execute().data:
+                    return 0
+        elif existing_q.limit(1).execute().data:
             return 0
     except Exception as exc:
         logger.warning(f"[quiz] failed to check existing questions for '{topic_slug}': {exc}")
@@ -265,14 +307,13 @@ def generate_and_store_questions(topic_slug: str, topic_name: str) -> int:
         logger.warning(f"[quiz] failed to load sections for '{topic_slug}': {exc}")
         sections = []
 
+    # For a beat-anchored check, pull ONLY the transcripts of clips in that beat;
+    # topic-wide stages (and legacy calls) sample across the whole topic.
     try:
-        clip_res = (
-            db.table("clips")
-            .select("transcript")
-            .eq("topic_slug", topic_slug)
-            .limit(6)
-            .execute()
-        )
+        clip_q = db.table("clips").select("transcript").eq("topic_slug", topic_slug)
+        if beat_scoped:
+            clip_q = clip_q.eq("section_index", anchor.section_index)
+        clip_res = clip_q.limit(6).execute()
         transcripts = [c["transcript"] for c in (clip_res.data or []) if c.get("transcript")]
     except Exception as exc:
         logger.warning(f"[quiz] failed to load clips for '{topic_slug}': {exc}")
@@ -298,13 +339,37 @@ def generate_and_store_questions(topic_slug: str, topic_name: str) -> int:
         logger.info(f"[quiz] no questions passed the gate for '{topic_slug}'")
         return 0
 
+    # Anchor columns to stamp on each row when this is an anchored run. Kept
+    # separate so a missing-column insert can be retried without them.
+    anchor_cols = (
+        {"stage": anchor.stage, "section_index": anchor.section_index} if anchor is not None else {}
+    )
+
     stored = 0
     for q in kept:
+        row = {"topic_slug": topic_slug, **q, **anchor_cols}
         try:
-            db.table("quiz_questions").insert({"topic_slug": topic_slug, **q}).execute()
+            db.table("quiz_questions").insert(row).execute()
             stored += 1
         except Exception as exc:
-            logger.warning(f"[quiz] failed to store a question for '{topic_slug}': {exc}")
+            # Best-effort anchor write: the additive Phase 2 columns
+            # (quiz_questions.stage / section_index) may not exist yet, so an
+            # insert carrying them is retried once without them (degrade
+            # gracefully, mirroring admission_gate's clips.level pattern).
+            # Persistence never fails on a missing column (Req 4.3, 5.3).
+            if anchor_cols:
+                logger.warning(
+                    f"[quiz] insert with stage/section_index failed for "
+                    f"'{topic_slug}' (columns may be absent); retrying without "
+                    f"anchor: {exc}"
+                )
+                try:
+                    db.table("quiz_questions").insert({"topic_slug": topic_slug, **q}).execute()
+                    stored += 1
+                except Exception as retry_exc:
+                    logger.warning(f"[quiz] failed to store a question for '{topic_slug}': {retry_exc}")
+            else:
+                logger.warning(f"[quiz] failed to store a question for '{topic_slug}': {exc}")
 
     logger.info(f"[quiz] '{topic_slug}' stored {stored} question(s)")
     return stored

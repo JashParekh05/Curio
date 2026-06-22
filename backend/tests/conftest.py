@@ -53,6 +53,9 @@ class _FakeQuery:
     def insert(self, payload, **k):
         self.op = "insert"; self.payload = payload; return self
 
+    def update(self, payload, **k):
+        self.op = "update"; self.payload = payload; return self
+
     def eq(self, col, val):
         self.filters[col] = val; return self
 
@@ -75,6 +78,16 @@ class _FakeQuery:
             self.rec["inserts"].append((self.table, self.payload))
             self.store.setdefault(self.table, []).append(self.payload)
             return _FakeResult([self.payload])
+        if self.op == "update":
+            self.rec.setdefault("updates", []).append(
+                (self.table, self.payload, dict(self.filters))
+            )
+            updated = []
+            for r in self.store.get(self.table, []):
+                if all(r.get(k) == v for k, v in self.filters.items()):
+                    r.update(self.payload)
+                    updated.append(r)
+            return _FakeResult(updated)
         rows = self.store.get(self.table, [])
         out = []
         for r in rows:

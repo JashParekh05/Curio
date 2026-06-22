@@ -22,6 +22,7 @@ import logging
 import os
 
 from app.models.schemas import ArcRole, ConceptType, PedagogicalRole, PlannedArc
+from app.services import llm
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +108,6 @@ def build_planned_arc(
         roles=roles,
     )
 
-MODEL = "gpt-4o-mini"
 MAX_REVISIONS = 2          # judge/revise rounds before accepting the plan as-is
 JUDGE_PASS_SCORE = 0.7     # logged; per-section `ok` flags drive revision
 
@@ -180,6 +180,49 @@ def _normalize_sections(raw: list, topic_name: str) -> list[dict]:
     return result
 
 
+def _condition_sections_for_level(sections: list[dict], level: str | None) -> list[dict]:
+    """Return *sections* with each ``search_query`` conditioned on *level*.
+
+    Level_Conditioned_Query shell (Req 1.4, 4.3): when a known curriculum level
+    is supplied, augment every beat's base ``search_query`` with the
+    level-appropriate qualifier via ``level_query.condition_beat_query`` so a
+    Foundations beat retrieves intro explainers and an Advanced beat retrieves
+    deeper material, before the query reaches the YouTube search.
+
+    Best-effort and non-mutating: returns shallow copies, leaving the original
+    (level-agnostic) section dicts — and any persisted row built from them —
+    unchanged, so the same topic can be re-conditioned for a different level.
+    An unrecognized or ``None`` level leaves behavior unchanged
+    (``target_content_level`` returns ``None`` and ``condition_beat_query``
+    no-ops). Never raises into the request path.
+    """
+    if not level:
+        return sections
+    try:
+        from app.services import level_query
+
+        if level_query.target_content_level(level) is None:
+            return sections  # unrecognized level -> existing behavior unchanged
+    except Exception as exc:  # pragma: no cover - defensive import guard
+        logger.warning(f"[section_planner] level conditioning unavailable: {exc}")
+        return sections
+
+    conditioned: list[dict] = []
+    for s in sections:
+        row = dict(s)
+        try:
+            row["search_query"] = level_query.condition_beat_query(
+                str(s.get("search_query") or ""), level
+            )
+        except Exception as exc:  # pragma: no cover - core is total, defensive only
+            logger.warning(
+                f"[section_planner] condition_beat_query failed for section "
+                f"{s.get('section_index')}: {exc}"
+            )
+        conditioned.append(row)
+    return conditioned
+
+
 def _sections_needing_revision(judge: dict | None) -> list[int]:
     """Indices the judge marked not-ok. Missing/empty judge → revise nothing."""
     if not judge:
@@ -231,7 +274,7 @@ Write a compelling, specific title for each part — a curiosity-gap phrase, max
 
 Return ONLY a JSON array:
 [{{"section_index": 0, "title": "..."}}, {{"section_index": 1, "title": "..."}}, {{"section_index": 2, "title": "..."}}, {{"section_index": 3, "title": "..."}}]'''
-    resp = _client().chat.completions.create(model=MODEL, max_tokens=400, messages=[{"role": "user", "content": prompt}])
+    resp = _client().chat.completions.create(model=llm.resolve_model(), max_tokens=400, messages=[{"role": "user", "content": prompt}])
     return json.loads(_strip_json(resp.choices[0].message.content))
 
 
@@ -250,7 +293,7 @@ For EACH section, write:
 
 Return ONLY a JSON array of 4 objects:
 [{{"section_index": 0, "title": "...", "description": "...", "search_query": "..."}}, ...]'''
-    resp = _client().chat.completions.create(model=MODEL, max_tokens=800, temperature=0, messages=[{"role": "user", "content": prompt}])
+    resp = _client().chat.completions.create(model=llm.resolve_model(), max_tokens=800, temperature=0, messages=[{"role": "user", "content": prompt}])
     return json.loads(_strip_json(resp.choices[0].message.content))
 
 
@@ -272,7 +315,7 @@ Mark a section "ok": false if it clearly fails ANY criterion. Be demanding about
 Return ONLY JSON:
 {{"overall_score": 0.0, "sections": [{{"section_index": 0, "ok": true, "issue": ""}}, {{"section_index": 1, "ok": true, "issue": ""}}, {{"section_index": 2, "ok": true, "issue": ""}}, {{"section_index": 3, "ok": true, "issue": ""}}]}}
 overall_score is 0-1; "issue" briefly states the problem (empty when ok).'''
-    resp = _client().chat.completions.create(model=MODEL, max_tokens=600, temperature=0, messages=[{"role": "user", "content": prompt}])
+    resp = _client().chat.completions.create(model=llm.resolve_model(), max_tokens=600, temperature=0, messages=[{"role": "user", "content": prompt}])
     return json.loads(_strip_json(resp.choices[0].message.content))
 
 
@@ -302,7 +345,7 @@ Rewrite each so it fully satisfies: role fit; title curiosity-gap <=8 words and 
 
 Return ONLY a JSON array of the corrected sections (same section_index values):
 [{{"section_index": N, "title": "...", "description": "...", "search_query": "..."}}, ...]'''
-    resp = _client().chat.completions.create(model=MODEL, max_tokens=600, temperature=0, messages=[{"role": "user", "content": prompt}])
+    resp = _client().chat.completions.create(model=llm.resolve_model(), max_tokens=600, temperature=0, messages=[{"role": "user", "content": prompt}])
     return json.loads(_strip_json(resp.choices[0].message.content))
 
 
@@ -361,9 +404,18 @@ def plan_and_store_sections(
     topic_name: str,
     difficulty: str = "intermediate",
     path_context: list[str] | None = None,
+    level: str | None = None,
 ) -> list[dict]:
     """Plan 4 sections (decomposed + judged) and store them in topic_sections.
-    Returns the section dicts. Cached: returns existing rows without calling the LLM."""
+    Returns the section dicts. Cached: returns existing rows without calling the LLM.
+
+    When *level* is a recognized curriculum level (beginner|intermediate|advanced),
+    each returned section's ``search_query`` is conditioned on the level via the
+    Level_Conditioned_Query core (Req 1.4, 4.3) so downstream retrieval pulls
+    level-appropriate clips. The level-agnostic base query is what gets persisted,
+    so the same topic can be re-conditioned for any level. ``level=None`` or an
+    unrecognized level leaves existing behavior unchanged. Best-effort: never
+    raises into the request path."""
     from app.db.supabase import get_client
     db = get_client()
 
@@ -375,7 +427,7 @@ def plan_and_store_sections(
         .execute()
     )
     if existing.data:
-        return existing.data
+        return _condition_sections_for_level(existing.data, level)
 
     sections = _plan_sections(topic_name, difficulty, path_context)
 
@@ -395,7 +447,7 @@ def plan_and_store_sections(
             logger.warning(f"[section_planner] Failed to store section {row['section_index']} for {topic_slug}: {exc}")
 
     logger.info(f"[section_planner] {len(stored)} sections stored for {topic_slug}")
-    return stored
+    return _condition_sections_for_level(stored, level)
 
 
 # --- topic expansion (endless "more about this subject") -------------------
@@ -436,7 +488,7 @@ For each angle return:
 Return ONLY a JSON array:
 [{{"title": "...", "description": "...", "search_query": "..."}}]"""
     resp = _client().chat.completions.create(
-        model=MODEL, max_tokens=600, temperature=0.7,
+        model=llm.resolve_model(), max_tokens=600, temperature=0.7,
         messages=[{"role": "user", "content": prompt}],
     )
     return json.loads(_strip_json(resp.choices[0].message.content))
@@ -508,7 +560,7 @@ def classify_concept_type(
     )
     try:
         resp = _client().chat.completions.create(
-            model=MODEL,
+            model=llm.resolve_model(),
             max_tokens=20,
             temperature=0,
             messages=[{"role": "user", "content": prompt}],

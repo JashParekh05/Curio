@@ -103,11 +103,38 @@ class TopicRequest(BaseModel):
     user_id: str | None = None
 
 
+class CheckpointCard(BaseModel):
+    """A soft, always-skippable checkpoint card woven inline into a topic's clip
+    sequence (Phase 1, Req 1.5). Mirrors the Checkpoint_Placement core's
+    ``CheckpointCard`` for transport. ``after_clip_index`` points within the
+    topic's served ``clips`` list; the card is rendered between clips and never
+    stops the feed advancing (``skippable`` is always True)."""
+    stage: Literal["check", "post"]
+    after_clip_index: int
+    topic_slug: str
+    section_index: int | None = None
+    skippable: bool = True
+
+
+class FeedLevel(BaseModel):
+    """One Level of the serialized LeveledPath returned alongside the feed so the
+    frontend can render the Level -> Topic -> Beat stepper (Req 1.1, 4.2). NULL
+    ``learning_paths.levels`` degrades to a single implicit level."""
+    ordinal: int
+    name: str
+    topic_slugs: list[str] = []
+
+
 class FeedResponse(BaseModel):
     topic_slug: str
     clips: list[Clip]
     processing: bool = False
     failed: bool = False  # terminal: out of retry budget and still empty
+    # Additive (Phase 1): soft inline checkpoint cards for this topic and the
+    # leveled-path projection for the stepper. Both default empty so legacy
+    # consumers and other endpoints returning FeedResponse are unaffected.
+    checkpoints: list[CheckpointCard] = []
+    levels: list[FeedLevel] = []
 
 
 class DiscoverResponse(BaseModel):

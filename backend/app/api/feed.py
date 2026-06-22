@@ -3,9 +3,20 @@ import logging
 from datetime import datetime, timezone
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from app.rate_limit import limiter
-from app.models.schemas import Clip, ClipEvent, FeedResponse, TopicRecommendation, DiscoverResponse
+from app.models.schemas import (
+    Clip,
+    ClipEvent,
+    FeedResponse,
+    TopicRecommendation,
+    DiscoverResponse,
+    CheckpointCard,
+    FeedLevel,
+)
 from app.db.supabase import get_client
 from app.auth import require_user
+
+from app.services.checkpoint_placement import place_checkpoints
+from app.services.remediation import RewatchClip, clips_to_rewatch, DEFAULT_MAX_REWATCH
 
 from app.services.feed_scoring import (
     _parse_vector,
@@ -76,6 +87,134 @@ def _schedule_impressions(
         logger.warning(f"[feed] Failed to schedule impressions for surface={feed_surface}: {e}")
 
 
+def _deserialize_levels(payload) -> list[FeedLevel]:
+    """Best-effort: turn the persisted ``learning_paths.levels`` jsonb projection
+    into a list of :class:`FeedLevel`.
+
+    Returns ``[]`` when the payload is null / empty / malformed so the caller can
+    fall back to a single implicit level (legacy behavior). Never raises
+    (Req 4.3, 4.4): a malformed row degrades to the implicit-level fallback rather
+    than breaking the feed.
+    """
+    if not payload or not isinstance(payload, list):
+        return []
+    levels: list[FeedLevel] = []
+    try:
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            slugs = item.get("topic_slugs")
+            if not isinstance(slugs, list):
+                continue
+            levels.append(
+                FeedLevel(
+                    ordinal=int(item.get("ordinal", len(levels) + 1)),
+                    name=str(item.get("name") or f"Level {len(levels) + 1}"),
+                    topic_slugs=[str(s) for s in slugs],
+                )
+            )
+    except Exception as e:
+        logger.warning(f"[feed] Failed to deserialize learning_paths.levels: {e}")
+        return []
+    return levels
+
+
+def _implicit_levels(topic_order: list[str]) -> list[FeedLevel]:
+    """A NULL / absent ``learning_paths.levels`` renders a single implicit level
+    over all topics in feed order (Req 5.3, legacy single-level behavior)."""
+    return [FeedLevel(ordinal=1, name="Foundations", topic_slugs=list(topic_order))]
+
+
+# Columns needed to both render a rewatch suggestion clip and feed the
+# Remediation_Select ordering (role_ordinal / final_score / section_index).
+_REWATCH_COLS = (
+    "id,topic_slug,title,description,video_url,thumbnail_url,duration_seconds,"
+    "source_url,source_platform,hook_score,final_score,created_at,section_index,"
+    "role_ordinal"
+)
+
+
+def _select_rewatch_clips(
+    db,
+    session_id: str,
+    topic_slug: str,
+    section_index: int,
+    max_clips: int = DEFAULT_MAX_REWATCH,
+) -> list[Clip]:
+    """Soft remediation loader: pick the learner's already-seen clips for the weak
+    beat to recommend rewatching (Remediation_Select shell, Req 3.2, 4.2, 4.3).
+
+    Loads the clips the learner has seen in this session (from ``clip_events``)
+    that belong to ``topic_slug`` and the weak beat ``section_index``, maps them
+    to the pure :class:`~app.services.remediation.RewatchClip`, and lets
+    :func:`~app.services.remediation.clips_to_rewatch` choose and order the
+    suggestion (Canonical_Arc order: role_ordinal asc / None last, final_score
+    desc, clip_id asc). The chosen ids are then returned as full :class:`Clip`
+    objects in that order for the end-card.
+
+    Best-effort and off the request path (Req 4.3): any read failure -- including
+    the columns/filters not being present -- degrades to an empty list rather than
+    raising, and an empty result simply means there is nothing to suggest. This is
+    a soft suggestion only; it never blocks the learner from advancing (Req 4.2).
+    """
+    # Already-seen clips for this session.
+    try:
+        events = (
+            db.table("clip_events")
+            .select("clip_id")
+            .eq("session_id", session_id)
+            .execute()
+        )
+        seen_ids = sorted({e["clip_id"] for e in (events.data or []) if e.get("clip_id")})
+    except Exception as e:
+        logger.warning(f"[feed] remediation: failed to load seen clips for session={session_id}: {e}")
+        return []
+    if not seen_ids:
+        return []
+
+    # Of those, keep only the clips on the weak beat of the weak topic.
+    try:
+        rows = (
+            db.table("clips")
+            .select(_REWATCH_COLS)
+            .in_("id", seen_ids)
+            .eq("topic_slug", topic_slug)
+            .eq("section_index", section_index)
+            .execute()
+        )
+    except Exception as e:
+        logger.warning(
+            f"[feed] remediation: failed to load weak-beat clips for "
+            f"topic={topic_slug} beat={section_index}: {e}"
+        )
+        return []
+
+    clips_by_id: dict[str, Clip] = {}
+    candidates: list[RewatchClip] = []
+    for row in (rows.data or []):
+        row.setdefault("hook_score", 0.5)
+        try:
+            clip = Clip(**row)
+        except Exception as e:
+            logger.warning(f"[feed] remediation: skipping malformed clip row: {e}")
+            continue
+        if clip.section_index is None:
+            continue
+        clips_by_id[clip.id] = clip
+        candidates.append(
+            RewatchClip(
+                clip_id=clip.id,
+                section_index=clip.section_index,
+                role_ordinal=clip.role_ordinal,
+                final_score=clip.final_score if clip.final_score is not None else clip.hook_score,
+            )
+        )
+
+    # Pure core decides selection + order; never raises.
+    ordered = clips_to_rewatch(section_index, candidates, max_clips=max_clips)
+    return [clips_by_id[rc.clip_id] for rc in ordered if rc.clip_id in clips_by_id]
+
+
 @router.get("/path/{session_id}", response_model=list[FeedResponse])
 async def get_path_feed(session_id: str, background_tasks: BackgroundTasks, caller_id: str = Depends(require_user)):
     db = get_client()
@@ -94,6 +233,25 @@ async def get_path_feed(session_id: str, background_tasks: BackgroundTasks, call
         return []
     if path.data[0].get("user_id") and path.data[0]["user_id"] != caller_id:
         raise HTTPException(status_code=403, detail="Access denied")
+
+    # Leveled feed (Phase 1, Req 1.1/4.2): read the serialized LeveledPath
+    # projection. Done as a SEPARATE best-effort query so a missing `levels`
+    # column (operator-run migration not yet applied) degrades to a single
+    # implicit level instead of breaking the main path read (Req 4.3, 5.3).
+    levels_payload = None
+    try:
+        lv = (
+            db.table("learning_paths")
+            .select("levels")
+            .eq("session_id", session_id)
+            .limit(1)
+            .execute()
+        )
+        if lv.data:
+            levels_payload = lv.data[0].get("levels")
+    except Exception as e:
+        logger.warning(f"[feed] Failed to fetch learning_paths.levels for session={session_id} (column may be absent): {e}")
+        levels_payload = None
 
     user_query = path.data[0].get("user_query", "")
     seen_ids, topic_completion = _get_session_telemetry(db, session_id)
@@ -287,7 +445,49 @@ async def get_path_feed(session_id: str, background_tasks: BackgroundTasks, call
         session_id=session_id,
         user_id=path.data[0].get("user_id"),
     )
-    return served
+
+    # Leveled feed + inline soft checkpoints (Checkpoint_Placement shell, Req 1.5,
+    # 4.2, 4.3). Computed AFTER interleave/dedupe so every card's
+    # `after_clip_index` aligns with the FINAL per-topic served clip list. The
+    # LeveledPath projection (or a single implicit level when absent) is attached
+    # so the frontend can render the Level -> Topic -> Beat stepper. Best-effort:
+    # a failed placement yields no cards for that topic and the feed still serves
+    # its clips normally; nothing here ever hard-locks or fails the request path.
+    feed_levels = _deserialize_levels(levels_payload) or _implicit_levels(
+        [f.topic_slug for f in served]
+    )
+    final_feeds: list[FeedResponse] = []
+    for f in served:
+        checkpoints: list[CheckpointCard] = []
+        try:
+            cards = place_checkpoints(
+                [c.section_index if c.section_index is not None else -1 for c in f.clips],
+                f.topic_slug,
+            )
+            checkpoints = [
+                CheckpointCard(
+                    stage=card.stage,
+                    after_clip_index=card.after_clip_index,
+                    topic_slug=card.topic_slug,
+                    section_index=card.section_index,
+                    skippable=card.skippable,
+                )
+                for card in cards
+            ]
+        except Exception as e:
+            logger.warning(f"[feed] checkpoint placement failed for topic={f.topic_slug}: {e}")
+            checkpoints = []
+        final_feeds.append(
+            FeedResponse(
+                topic_slug=f.topic_slug,
+                clips=f.clips,
+                processing=f.processing,
+                failed=f.failed,
+                checkpoints=checkpoints,
+                levels=feed_levels,
+            )
+        )
+    return final_feeds
 
 
 @router.get("/recommendations/{session_id}", response_model=list[TopicRecommendation])
@@ -312,6 +512,46 @@ async def get_recommendations(session_id: str, caller_id: str = Depends(require_
 
     from app.agents.recommendation_agent import run_recommendations
     return await asyncio.to_thread(run_recommendations, session_id, path_slugs)
+
+
+@router.get("/remediation/{session_id}", response_model=list[Clip])
+async def get_remediation(
+    session_id: str,
+    topic_slug: str = Query(..., min_length=1, max_length=120),
+    section_index: int = Query(..., ge=0, le=3),
+    caller_id: str = Depends(require_user),
+):
+    """Soft "rewatch these clips" suggestion for a failed checkpoint's weak beat
+    (Remediation_Select shell, Req 3.2, 4.2, 4.3).
+
+    Given the learner's session, the weak topic, and the weak beat
+    (``section_index``) from a failed ``check``/``post`` checkpoint, returns the
+    small ordered list of already-seen clips on that beat to recommend rewatching.
+    Owner-only and best-effort, exactly like the other feed endpoints: the caller
+    may only read their own session (else 403), and any computation failure
+    degrades to an empty list rather than raising. This is a soft suggestion
+    surfaced on the end-card -- it never blocks the learner from advancing
+    (Req 4.2)."""
+    db = get_client()
+    try:
+        path = (
+            db.table("learning_paths")
+            .select("user_id")
+            .eq("session_id", session_id)
+            .limit(1)
+            .execute()
+        )
+    except Exception as e:
+        logger.warning(f"[feed] remediation: failed to fetch learning_path for session={session_id}: {e}")
+        return []
+    if not path.data:
+        return []
+    if path.data[0].get("user_id") and path.data[0]["user_id"] != caller_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    return await asyncio.to_thread(
+        _select_rewatch_clips, db, session_id, topic_slug, section_index
+    )
 
 
 @router.get("/clip/{clip_id}", response_model=Clip)

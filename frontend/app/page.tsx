@@ -6,11 +6,12 @@ import { useAuth } from "@/lib/auth-context";
 import { createLearningPath, getUserHistory, getUserProfile, getTopicSections, type LearningPath, type LearningPathSummary, type TopicSection } from "@/lib/api";
 import { hasSeenIntro } from "@/lib/intro";
 import LegalFooter from "@/components/LegalFooter";
+import PlacementScreen from "@/components/PlacementScreen";
 
 const SUGGESTIONS = [
-  "I want to learn hashmaps and binary trees",
+  "I want to learn about binary trees",
   "Teach me cell biology from scratch",
-  "Explain machine learning basics",
+  "Teach me about World War 2",
   "I need to understand calculus derivatives",
 ];
 
@@ -28,6 +29,10 @@ export default function Home() {
   const [expandedTopic, setExpandedTopic] = useState<string | null>(null);
   const [sectionsByTopic, setSectionsByTopic] = useState<Record<string, TopicSection[]>>({});
   const [loadingSections, setLoadingSections] = useState<string | null>(null);
+  // When true, the short optional pre-feed placement screen is shown before
+  // entering the feed. It self-skips when there are no diagnostic questions, so
+  // enabling it never blocks or regresses entry to the feed.
+  const [placing, setPlacing] = useState(false);
 
   useEffect(() => {
     if (!user || !session) return;
@@ -79,6 +84,37 @@ export default function Home() {
   }
 
   if (loading) return null;
+
+  // Show the optional pre-feed placement screen before entering the feed. It
+  // fetches the diagnostic itself and self-skips into the feed when there are no
+  // questions, so this never blocks entry (no regression).
+  if (placing && path && session) {
+    return (
+      <PlacementScreen
+        sessionId={path.session_id}
+        token={session.access_token}
+        topics={path.topics}
+        query={path.user_query}
+        onEnterFeed={(startTopicSlug) => {
+          const extra = startTopicSlug ? `&start_topic=${startTopicSlug}` : "";
+          router.push(`/feed?session=${path.session_id}${extra}`);
+        }}
+      />
+    );
+  }
+
+  // Level band headers for the path overview (Phase 1, Req 1.1, 4.2). When the
+  // LeveledPath is present, map each level's FIRST topic slug to its band header
+  // so the overview groups topics into ordered Levels (Foundations -> Core ->
+  // Advanced). Absent levels -> empty map -> the legacy flat list renders
+  // unchanged (no regression). Every level/topic stays navigable (soft).
+  const levelHeaderBySlug: Record<string, { ordinal: number; name: string; count: number }> = {};
+  if (path?.levels?.length) {
+    for (const lvl of path.levels) {
+      const first = lvl.topic_slugs[0];
+      if (first) levelHeaderBySlug[first] = { ordinal: lvl.ordinal, name: lvl.name, count: lvl.topic_slugs.length };
+    }
+  }
 
   if (!user) {
     return (
@@ -259,7 +295,21 @@ export default function Home() {
               <p className="text-ink text-sm font-medium">{path.summary}</p>
               <div className="space-y-2">
                 {path.topics.map((topic, i) => (
-                  <div key={topic.slug} className="brutal bg-white">
+                  <div key={topic.slug} className="space-y-2">
+                    {levelHeaderBySlug[topic.slug] && (
+                      <div className="flex items-center gap-2 pt-1">
+                        <span className="bg-ink text-paper w-5 h-5 flex items-center justify-center text-xs font-black shrink-0">
+                          {levelHeaderBySlug[topic.slug].ordinal}
+                        </span>
+                        <p className="flex-1 min-w-0 text-xs font-black uppercase tracking-wide text-ink truncate">
+                          {levelHeaderBySlug[topic.slug].name}
+                        </p>
+                        <span className="text-ink/50 text-xs font-bold shrink-0">
+                          {levelHeaderBySlug[topic.slug].count} topic{levelHeaderBySlug[topic.slug].count !== 1 ? "s" : ""}
+                        </span>
+                      </div>
+                    )}
+                    <div className="brutal bg-white">
                     <div className="flex items-center gap-3 px-3 py-3">
                       <span className="bg-accent-yellow brutal w-7 h-7 flex items-center justify-center text-xs font-black shrink-0">{i + 1}</span>
                       <button
@@ -302,6 +352,7 @@ export default function Home() {
                         )}
                       </div>
                     )}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -312,7 +363,7 @@ export default function Home() {
                 <p className="text-ink text-sm font-medium">{path.familiarity_prompt}</p>
                 <div className="flex gap-3">
                   <button
-                    onClick={() => router.push(`/feed?session=${path.session_id}`)}
+                    onClick={() => setPlacing(true)}
                     className="brutal-btn flex-1 bg-white text-ink py-3 text-sm"
                   >
                     Start from scratch
@@ -327,7 +378,7 @@ export default function Home() {
               </div>
             ) : (
               <button
-                onClick={() => router.push(`/feed?session=${path.session_id}`)}
+                onClick={() => setPlacing(true)}
                 className="brutal-btn w-full bg-accent-yellow text-ink py-4 text-lg"
               >
                 Start Watching

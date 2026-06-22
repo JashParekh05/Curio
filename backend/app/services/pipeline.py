@@ -5,13 +5,13 @@ import logging
 from typing import get_args
 from openai import OpenAI
 from app.services.embeddings import embed_texts
+from app.services import llm
 from app.models.schemas import LearningAtom, PedagogicalRole, PlannedArc
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
 _openai_client = None
-MODEL = "gpt-4o-mini"
 
 
 def _get_client():
@@ -176,7 +176,7 @@ def segment_into_atoms(
     topic_slug: str,
     planned_arc: PlannedArc,
 ) -> list[LearningAtom]:
-    """LLM shell: prompt gpt-4o-mini to cut the transcript into single-idea
+    """LLM shell: prompt the configured model to cut the transcript into single-idea
     atoms, each labeled with role, concept, prior_knowledge (list of strings),
     start, and end (in seconds).
 
@@ -254,7 +254,7 @@ Return a JSON array only — no markdown, no extra text:
     client = _get_client()
     try:
         response = client.chat.completions.create(
-            model=MODEL,
+            model=llm.resolve_model(),
             max_tokens=4096,
             messages=[{"role": "user", "content": prompt}],
         )
@@ -489,7 +489,7 @@ def _identify_segments(transcript: list[dict], topic_slug: str,
 
     try:
         response = client.chat.completions.create(
-            model=MODEL,
+            model=llm.resolve_model(),
             max_tokens=2048,
             messages=[{"role": "user", "content": prompt}],
         )

@@ -297,6 +297,7 @@ def persist_admitted(
     topic_slug: str,
     coherence_score: float,
     provider_provenance: "dict[str, str] | None" = None,
+    level: str | None = None,
 ) -> int:
     """Persist each Admitted_Clip with the on-demand pipeline's field set.
 
@@ -331,6 +332,23 @@ def persist_admitted(
     deep-content-ingestion tests) the persisted field set is exactly the
     pre-feature on-demand + metadata set, byte-identical to before.
 
+    Clip_Slot_Tag (structured-learn-curriculum, Req 1.3 / 4.4 / 5.3): when this
+    Topic is being ingested for a known curriculum ``level``, each admitted clip
+    is tagged with the curriculum slot it fills. The Content_Level is computed
+    once from ``level_query.target_content_level(level)`` (a recognized level, or
+    ``None`` so the read path falls back to the owning Topic's difficulty), and
+    per clip ``clip_slot.build_slot`` validates the single-idea-to-single-beat
+    invariant against the realized beat (``section_index = role_ordinal - 1``).
+    A clip that resolves to a recognized Content_Level is stamped onto the new
+    nullable ``clips.level`` column; a clip that fails ``is_single_beat`` (no
+    placeable beat) is logged and left untagged (served role-less, never
+    dropped). The ``level`` write is strictly best-effort: when the additive
+    ``clips.level`` column is not yet present the insert is retried without it so
+    ingestion never fails on a missing column, and ``section_index`` /
+    ``pedagogical_role`` / ``role_ordinal`` are not re-persisted here. A ``None``
+    / unrecognized ``level`` leaves ``clips.level`` NULL, which defers to the
+    Topic's difficulty at read time (no backfill required).
+
     Each candidate clip is run through ``arc_assembler.validate_clip`` (the same
     normalisation/exclusion gate the on-demand path uses) before insertion; a
     clip the validator rejects is logged and skipped, never stored.
@@ -347,11 +365,17 @@ def persist_admitted(
             the Source_Items acquired this run. When provided, each clip is
             stamped with its Provider_Provenance columns (Req 8.1); when ``None``
             the legacy field set is written unchanged.
+        level: Optional curriculum Level (one of ``level_filter.LEVELS``) the
+            Topic is being ingested for. When supplied and recognized, admitted
+            clips are tagged with the resolved Content_Level on ``clips.level``;
+            when ``None`` / unrecognized, ``clips.level`` is left NULL and the
+            read path defers to the Topic's difficulty (behavior-preserving for
+            existing callers).
 
     Returns:
         The count of clips actually stored.
 
-    Requirements: 4.4, 7.2, 8.1
+    Requirements: 4.4, 7.2, 8.1; structured-learn-curriculum 1.3, 4.4, 5.3
     """
     if not admitted:
         return 0
@@ -359,7 +383,7 @@ def persist_admitted(
     try:
         from app.db.supabase import get_client
         from app.models.schemas import Clip
-        from app.services import arc_assembler
+        from app.services import arc_assembler, clip_slot, level_query
     except Exception as exc:  # pragma: no cover - import wiring failure
         logger.warning(
             "[admission_gate] persist_admitted: import failed for topic_slug=%s: %s",
@@ -378,6 +402,14 @@ def persist_admitted(
             exc,
         )
         return 0
+
+    # Clip_Slot_Tag: resolve the Content_Level for this run once. A recognized
+    # curriculum level becomes the tag for every admitted clip; an absent /
+    # unrecognized level resolves to None so clips.level is left NULL and the
+    # read path defers to the Topic's difficulty (Req 1.3, 5.3).
+    slot_content_level = (
+        level_query.target_content_level(level) if level is not None else None
+    )
 
     stored = 0
     for segment in admitted:
@@ -456,7 +488,59 @@ def persist_admitted(
                 row["external_id"] = external_id
                 row["content_id"] = None
 
-            db.table("clips").insert(row).execute()
+            # Clip_Slot_Tag (Req 1.3, 4.4, 5.3): tag the clip with the
+            # curriculum slot it fills. The realized beat is the 0-based
+            # section_index derived from the 1-based role_ordinal; build_slot
+            # validates the single-idea-to-single-beat invariant. A clip that
+            # cannot be placed in a single beat (build_slot -> None) is logged
+            # and left untagged (served role-less, never dropped); a placeable
+            # clip with a recognized Content_Level is stamped onto clips.level.
+            # section_index / pedagogical_role / role_ordinal are NOT re-written
+            # here (already carried by the row above as role metadata).
+            section_index = (
+                validated.role_ordinal - 1
+                if isinstance(validated.role_ordinal, int)
+                and validated.role_ordinal >= 1
+                else None
+            )
+            slot = clip_slot.build_slot(
+                topic_slug,
+                slot_content_level,
+                section_index,
+                validated.pedagogical_role,
+                validated.role_ordinal,
+            )
+            if not clip_slot.is_single_beat(slot):
+                logger.info(
+                    "[admission_gate] persist_admitted: clip for topic_slug=%s "
+                    "role_ordinal=%s could not be placed in a single beat; "
+                    "left untagged (role-less)",
+                    topic_slug,
+                    validated.role_ordinal,
+                )
+            elif slot.content_level is not None:
+                row["level"] = slot.content_level
+
+            # Best-effort clips.level write: the additive ``clips.level`` column
+            # may not exist in the database yet, so an insert that fails with the
+            # ``level`` key present is retried once without it (degrade
+            # gracefully, mirroring coverage_view_store). Ingestion never fails
+            # on a missing column (Req 4.4, 5.3).
+            try:
+                db.table("clips").insert(row).execute()
+            except Exception as insert_exc:
+                if "level" in row:
+                    logger.warning(
+                        "[admission_gate] persist_admitted: insert with "
+                        "clips.level failed for topic_slug=%s (column may be "
+                        "absent); retrying without level: %s",
+                        topic_slug,
+                        insert_exc,
+                    )
+                    row.pop("level", None)
+                    db.table("clips").insert(row).execute()
+                else:
+                    raise
             stored += 1
         except Exception as exc:
             logger.warning(

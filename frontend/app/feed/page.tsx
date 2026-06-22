@@ -1,9 +1,9 @@
 "use client";
 
-import { Suspense, useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { Suspense, Fragment, useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
-import { getPathFeed, getTopicFeed, recordClipEvent, getRecommendations, getClipMetadata, type Clip, type FeedResponse, type TopicRecommendation } from "@/lib/api";
+import { getPathFeed, getTopicFeed, recordClipEvent, getRecommendations, getClipMetadata, getProgress, getRemediation, type Clip, type FeedResponse, type TopicRecommendation, type Checkpoint, type FeedLevel, type LearnerProgress, type RewatchClip } from "@/lib/api";
 import { flushClipEvent, type LastLogged } from "@/lib/clip-telemetry";
 import { computeWarmWindow, AHEAD, BEHIND } from "@/lib/warm-window";
 import { createOverlayCache, getOverlay, setOverlay, hasOverlay, deriveOverlay, type OverlayCache, type OverlayMetadata } from "@/lib/overlay-cache";
@@ -11,6 +11,8 @@ import { isRefreshEligible, REFRESH_MIN_INTERVAL_MS } from "@/lib/refresh-eligib
 import { shareOrCopy, topicShareUrl } from "@/lib/share";
 import ReelPlayer from "@/components/ReelPlayer";
 import PlanPanel from "@/components/PlanPanel";
+import LevelStepper from "@/components/LevelStepper";
+import SoftCheckpointCard from "@/components/SoftCheckpointCard";
 
 const POLL_INTERVAL_MS = 4000;
 
@@ -20,7 +22,7 @@ const POLL_INTERVAL_MS = 4000;
 function FeedContent() {
   const params = useSearchParams();
   const router = useRouter();
-  const { session, isGuest } = useAuth();
+  const { user, session, isGuest } = useAuth();
   const sessionId = params.get("session");
   const topicSlug = params.get("topic");
 
@@ -34,6 +36,21 @@ function FeedContent() {
   const [processing, setProcessing] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
   const [topicLabels, setTopicLabels] = useState<Record<string, string>>({});
+  // Per-topic soft checkpoints from the feed. Empty/absent for a topic means its
+  // scroll renders exactly as before (no regression).
+  const [checkpointsByTopic, setCheckpointsByTopic] = useState<Record<string, Checkpoint[]>>({});
+  // The serialized LeveledPath for the Level -> Topic -> Beat stepper. Each
+  // FeedResponse item carries the full path; empty means a single implicit level
+  // (legacy single-list) and the stepper button stays hidden.
+  const [levels, setLevels] = useState<FeedLevel[]>([]);
+  const [showLevels, setShowLevels] = useState(false);
+  // Real mastery-driven progress (per-level % + per-topic mastery/unlock badges)
+  // from GET /api/progress. null until loaded or when unavailable; in that case
+  // the stepper/panel fall back to the lightweight feed-position signal.
+  const [progress, setProgress] = useState<LearnerProgress | null>(null);
+  // Soft "rewatch these clips" suggestions for the just-finished topic, shown on
+  // the end-card after a weak checkpoint. Empty unless the learner did poorly.
+  const [rewatchClips, setRewatchClips] = useState<RewatchClip[]>([]);
   const [timedOut, setTimedOut] = useState(false);
   const [loadError, setLoadError] = useState(false);
   const [recommendations, setRecommendations] = useState<TopicRecommendation[]>([]);
@@ -65,6 +82,10 @@ function FeedContent() {
   // and the last completed refresh time per clip id.
   const refreshInFlightRef = useRef(false);
   const lastRefreshAtRef = useRef<Record<string, number>>({});
+  // Per-checkpoint answer tally keyed by topic slug, used to detect a "weak"
+  // checkpoint (more wrong than right) so the end-card can surface a soft
+  // rewatch suggestion for that beat. Purely advisory — never blocks advancing.
+  const weakCheckpointRef = useRef<Record<string, { sectionIndex: number | null; correct: number; total: number }>>({});
   const loadFeed = useCallback(async () => {
     if (!session) return;
     try {
@@ -91,6 +112,15 @@ function FeedContent() {
           return brandNew.length > 0 ? [...prev, ...brandNew] : prev;
         });
         setTopicLabels((prev) => ({ ...prev, ...labels }));
+        const cpByTopic: Record<string, Checkpoint[]> = {};
+        feeds.forEach((f) => { if (f.checkpoints?.length) cpByTopic[f.topic_slug] = f.checkpoints; });
+        if (Object.keys(cpByTopic).length > 0) {
+          setCheckpointsByTopic((prev) => ({ ...prev, ...cpByTopic }));
+        }
+        // The LeveledPath is identical across feed items; adopt the first
+        // non-empty projection. Absent -> stepper hidden (legacy single list).
+        const lp = feeds.find((f) => f.levels && f.levels.length > 0)?.levels;
+        if (lp && lp.length > 0) setLevels(lp);
         setProcessing(feeds.some((f) => f.processing));
         // Terminal-empty short-circuit: when every topic is out of its
         // self-heal budget (failed) or finished empty, and no clips exist at
@@ -111,6 +141,7 @@ function FeedContent() {
         const labels: Record<string, string> = {};
         feed.clips.forEach((c) => { labels[c.id] = topicSlug; });
         setTopicLabels(labels);
+        setCheckpointsByTopic(feed.checkpoints?.length ? { [topicSlug]: feed.checkpoints } : {});
       }
     } catch {
       setLoadError(true);
@@ -133,6 +164,11 @@ function FeedContent() {
       newClips.forEach((c) => seenClipIdsRef.current.add(c.id));
       setClips((prev) => [...prev, ...newClips]);
       setTopicLabels((prev) => ({ ...prev, ...newLabels }));
+      const cpByTopic: Record<string, Checkpoint[]> = {};
+      feeds.forEach((f) => { if (f.checkpoints?.length) cpByTopic[f.topic_slug] = f.checkpoints; });
+      if (Object.keys(cpByTopic).length > 0) {
+        setCheckpointsByTopic((prev) => ({ ...prev, ...cpByTopic }));
+      }
     } catch {
       // silently fail — user still has remaining clips
     } finally {
@@ -361,11 +397,76 @@ function FeedContent() {
     getRecommendations(sessionId, session?.access_token ?? "").then(setRecommendations).catch(() => {});
   }, [activeIndex, clips.length, sessionId]);
 
+  // Load real mastery-driven progress (per-level % + per-topic badges) for the
+  // stepper and the plan panel. Owner-only on the server, so it is keyed by the
+  // learner's own user id (guests have an anonymous user id too). Best-effort:
+  // a null result leaves the lightweight feed-position progress in place (no
+  // regression). Re-fetched as the learner advances so badges stay fresh.
+  useEffect(() => {
+    if (!sessionId || !user || !session?.access_token) return;
+    getProgress(user.id, session.access_token).then(setProgress).catch(() => {});
+  }, [sessionId, user, session, activeIndex, clips.length]);
+
+  // When the learner reaches the end card, surface a soft "rewatch these clips"
+  // suggestion for the just-finished topic if they did poorly — either a weak
+  // checkpoint (more wrong than right) or below-threshold mastery. Best-effort:
+  // the remediation seam may be absent (returns []), so nothing renders and the
+  // feed never blocks advancing.
+  useEffect(() => {
+    if (clips.length === 0 || processing || activeIndex < clips.length - 1) return;
+    if (!sessionId || !session?.access_token) return;
+    const finishedSlug = topicLabels[clips[clips.length - 1]?.id] ?? activeTopicSlug;
+    if (!finishedSlug) {
+      setRewatchClips([]);
+      return;
+    }
+    const weak = weakCheckpointRef.current[finishedSlug];
+    const isWeakCheckpoint = !!weak && weak.total > 0 && weak.correct * 2 < weak.total;
+    const topicProgress = progress?.topics[finishedSlug];
+    const belowThreshold = !!topicProgress && !topicProgress.mastered && topicProgress.status !== "not_started";
+    if (!isWeakCheckpoint && !belowThreshold) {
+      setRewatchClips([]);
+      return;
+    }
+    // Prefer the weak checkpoint's beat; otherwise let the server pick (null).
+    const sectionIndex = isWeakCheckpoint ? weak.sectionIndex : null;
+    let cancelled = false;
+    getRemediation(sessionId, finishedSlug, sectionIndex, session.access_token)
+      .then((cs) => { if (!cancelled) setRewatchClips(cs); })
+      .catch(() => { if (!cancelled) setRewatchClips([]); });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeIndex, clips.length, processing, sessionId, session, progress]);
+
   // Bounded warm window of indices to mount as players around the active index.
   const warmSet = useMemo(
     () => new Set(computeWarmWindow(activeIndex, clips.length, AHEAD, BEHIND)),
     [activeIndex, clips.length],
   );
+
+  // Map each global clip index -> the soft checkpoint cards to render right
+  // after it. A checkpoint's `after_clip_index` is relative to its OWN topic's
+  // served clip list, so we walk the flattened feed keeping a per-topic counter
+  // and resolve each topic-local index to its global position. Cards are woven
+  // in as extra scroll sections WITHOUT a `data-index`, so clip indexing,
+  // telemetry, the warm window, and goTo/scroll-to-index stay clip-based and
+  // unchanged. Topics with no checkpoints contribute nothing (no regression).
+  const checkpointsByGlobalIndex = useMemo(() => {
+    const result: Record<number, Checkpoint[]> = {};
+    if (Object.keys(checkpointsByTopic).length === 0) return result;
+    const topicCounters: Record<string, number> = {};
+    clips.forEach((clip, gi) => {
+      const slug = topicLabels[clip.id];
+      if (!slug) return;
+      const localIdx = topicCounters[slug] ?? 0;
+      topicCounters[slug] = localIdx + 1;
+      const cps = checkpointsByTopic[slug];
+      if (!cps) return;
+      const matching = cps.filter((c) => c.after_clip_index === localIdx);
+      if (matching.length > 0) result[gi] = matching;
+    });
+    return result;
+  }, [clips, topicLabels, checkpointsByTopic]);
 
   // Resolve a clip's Overlay_Metadata, caching it so revisiting a clip never
   // re-derives or refetches. On a hit the cached value is returned directly (no
@@ -409,6 +510,46 @@ function FeedContent() {
     return out;
   }, [clips, topicLabels]);
 
+  // The active beat (section_index) within the current topic, for the stepper's
+  // Beat tier. null when the clip carries no beat (legacy / role-less clip).
+  const activeSection = activeClip?.section_index ?? null;
+
+  // Topics the learner has reached so far, for lightweight per-level progress
+  // (topics covered / total). A topic counts as covered once its first clip in
+  // the flattened feed is at or before the active index. This is a placeholder
+  // signal until Phase 3 wires real mastery from GET /api/progress (task 19.1).
+  const coveredSlugs = useMemo(() => {
+    const firstIdx: Record<string, number> = {};
+    clips.forEach((c, i) => {
+      const slug = topicLabels[c.id];
+      if (slug && firstIdx[slug] === undefined) firstIdx[slug] = i;
+    });
+    const covered = new Set<string>();
+    for (const [slug, idx] of Object.entries(firstIdx)) {
+      if (idx <= activeIndex) covered.add(slug);
+    }
+    return covered;
+  }, [clips, topicLabels, activeIndex]);
+
+  // Real per-topic mastery + per-level percent from GET /api/progress, shaped for
+  // the stepper and plan panel. Undefined when progress is unavailable, in which
+  // case those surfaces fall back to the lightweight feed-position signal.
+  const topicMastery = useMemo(() => {
+    if (!progress) return undefined;
+    const m: Record<string, { mastered: boolean; unlock: string }> = {};
+    for (const [slug, t] of Object.entries(progress.topics)) {
+      m[slug] = { mastered: t.mastered, unlock: t.unlock };
+    }
+    return m;
+  }, [progress]);
+
+  const levelPercent = useMemo(() => {
+    if (!progress) return undefined;
+    const m: Record<number, number> = {};
+    for (const lvl of progress.levels) m[lvl.ordinal] = lvl.percent_complete;
+    return m;
+  }, [progress]);
+
   // Jump to a topic (or a specific section) from the plan overlay. Prefer an
   // in-place scroll to the already-loaded clip; fall back to a route navigation
   // with start params when that beat hasn't been fetched yet.
@@ -425,6 +566,7 @@ function FeedContent() {
       router.push(`/feed?session=${sessionId}${extra}`);
     }
     setShowPlan(false);
+    setShowLevels(false);
   }, [clips, topicLabels, goTo, sessionId, router]);
 
   // Share the current topic (deep link lands a new visitor straight on it).
@@ -551,6 +693,14 @@ function FeedContent() {
               Share
             </button>
           )}
+          {sessionId && levels.length >= 2 && (
+            <button
+              onClick={() => setShowLevels(true)}
+              className="brutal-dark-btn bg-accent-lime text-ink font-bold px-3 py-1.5 text-xs leading-none"
+            >
+              Levels
+            </button>
+          )}
           {sessionId && orderedTopics.length > 0 && (
             <button
               onClick={() => setShowPlan(true)}
@@ -562,6 +712,42 @@ function FeedContent() {
         </span>
       </div>
 
+      {/* Level -> Topic -> Beat stepper (Phase 1, Req 1.1, 4.2). A slide-in panel
+          mirroring the Plan overlay. Only shown for a genuine multi-level
+          LeveledPath; a single implicit level keeps the legacy chrome unchanged.
+          Every level is navigable — later levels are never locked (soft). */}
+      {sessionId && levels.length >= 2 && showLevels && (
+        <div className="absolute inset-0 z-40 flex">
+          <div className="flex-1 bg-ink/50" onClick={() => setShowLevels(false)} />
+          <div
+            className="w-[85%] max-w-sm h-full bg-paper border-l-[3px] border-ink overflow-y-auto"
+            style={{ scrollbarWidth: "none" }}
+          >
+            <div className="sticky top-0 bg-paper px-4 py-3 border-b-[3px] border-ink flex items-center justify-between gap-2">
+              <p className="text-ink font-black text-base">Your levels</p>
+              <button
+                onClick={() => setShowLevels(false)}
+                className="brutal-btn bg-white text-ink font-black w-7 h-7 flex items-center justify-center shadow-brutal-sm"
+                aria-label="Close levels"
+              >
+                X
+              </button>
+            </div>
+            <div className="p-3">
+              <LevelStepper
+                levels={levels}
+                activeSlug={activeTopicSlug}
+                activeSection={activeSection}
+                coveredSlugs={coveredSlugs}
+                topicMastery={topicMastery}
+                levelPercent={levelPercent}
+                onJump={jumpToPlan}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
       {sessionId && (
         <PlanPanel
           open={showPlan}
@@ -570,6 +756,7 @@ function FeedContent() {
           activeSlug={activeTopicSlug}
           sessionId={sessionId}
           onJump={jumpToPlan}
+          progressTopics={progress?.topics}
         />
       )}
 
@@ -620,12 +807,12 @@ function FeedContent() {
         style={{ scrollbarWidth: "none" }}
       >
         {clips.map((clip, i) => (
-          <div
-            key={clip.id}
-            data-index={i}
-            className="w-full relative snap-start snap-always"
-            style={{ height: "100dvh" }}
-          >
+          <Fragment key={clip.id}>
+            <div
+              data-index={i}
+              className="w-full relative snap-start snap-always"
+              style={{ height: "100dvh" }}
+            >
             {warmSet.has(i) ? (
               <ReelPlayer
                 clip={clip}
@@ -655,7 +842,51 @@ function FeedContent() {
               // target are preserved, but mounts no media element.
               <div className="absolute inset-0 bg-black" aria-hidden />
             )}
-          </div>
+            </div>
+
+            {/* Soft checkpoint cards woven in right after this clip. They are
+                plain snap sections with NO data-index, so the next clip keeps
+                its index; scrolling past a card advances exactly as before and
+                it never blocks. */}
+            {(checkpointsByGlobalIndex[i] ?? []).map((cp) => (
+              <div
+                key={`cp-${cp.topic_slug}-${cp.stage}-${cp.section_index ?? "topic"}-${cp.after_clip_index}`}
+                className="w-full relative snap-start snap-always"
+                style={{ height: "100dvh" }}
+              >
+                <div className="absolute inset-0 bg-paper flex items-center justify-center px-4 overflow-y-auto py-10">
+                  <div className="w-full max-w-md">
+                    <SoftCheckpointCard
+                      topicSlug={cp.topic_slug}
+                      topicName={(topicLabels[clip.id] ?? cp.topic_slug)
+                        .split("-")
+                        .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+                        .join(" ")}
+                      stage={cp.stage}
+                      sectionIndex={cp.section_index}
+                      sessionId={sessionId}
+                      token={session?.access_token ?? ""}
+                      onSkip={() => goTo(i + 1)}
+                      onAnswered={(correct) => {
+                        // Tally this checkpoint's answers per topic so the
+                        // end-card can offer a soft rewatch for a weak beat.
+                        const prev = weakCheckpointRef.current[cp.topic_slug] ?? {
+                          sectionIndex: cp.section_index,
+                          correct: 0,
+                          total: 0,
+                        };
+                        weakCheckpointRef.current[cp.topic_slug] = {
+                          sectionIndex: cp.section_index,
+                          correct: prev.correct + (correct ? 1 : 0),
+                          total: prev.total + 1,
+                        };
+                      }}
+                    />
+                  </div>
+                </div>
+              </div>
+            ))}
+          </Fragment>
         ))}
 
         {/* End card */}
@@ -666,6 +897,41 @@ function FeedContent() {
               <p className="text-ink/60 text-sm text-center font-medium">
                 You watched {clips.length} clip{clips.length !== 1 ? "s" : ""}.
               </p>
+              {/* Soft remediation: a gentle "rewatch these clips" nudge for the
+                  beat the learner was weak on. Always optional — tapping a clip
+                  just scrolls back to it; it never blocks moving on. */}
+              {rewatchClips.length > 0 && (
+                <div className="w-full max-w-sm space-y-2">
+                  <p className="text-ink text-xs font-black uppercase tracking-wide">Rewatch these clips</p>
+                  <p className="text-ink/60 text-xs font-medium">
+                    A quick refresher on what tripped you up — totally optional.
+                  </p>
+                  {rewatchClips.map((rc) => {
+                    const idx = clips.findIndex((c) => c.id === rc.clip_id);
+                    return (
+                      <button
+                        key={rc.clip_id}
+                        onClick={() => { if (idx >= 0) goTo(idx); }}
+                        disabled={idx < 0}
+                        className="brutal-btn w-full text-left bg-accent-pink text-ink px-4 py-3 flex items-center gap-3 disabled:opacity-40 disabled:translate-x-0 disabled:translate-y-0"
+                      >
+                        {rc.thumbnail_url && (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={rc.thumbnail_url}
+                            alt=""
+                            className="w-12 h-12 object-cover border-2 border-ink shrink-0"
+                          />
+                        )}
+                        <p className="font-bold text-sm flex-1 min-w-0 truncate">
+                          {rc.title ?? "Rewatch clip"}
+                        </p>
+                        <span className="text-ink font-black text-sm shrink-0">{">"}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
               {recommendations.length > 0 ? (
                 <>
                   <p className="text-ink text-xs font-black uppercase tracking-wide">What to learn next</p>

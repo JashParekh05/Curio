@@ -85,6 +85,44 @@ class TestMergeRevisions:
         assert out[3]["title"] == "T3"
 
 
+class TestConditionSectionsForLevel:
+    """Level_Conditioned_Query shell: search_query conditioned on a known level."""
+
+    def _sections(self):
+        return [
+            {"section_index": 0, "title": "T0", "description": "D0", "search_query": "recursion explained"},
+            {"section_index": 1, "title": "T1", "description": "D1", "search_query": "recursion base case"},
+        ]
+
+    def test_recognized_level_appends_qualifier(self):
+        from app.services.level_query import LEVEL_QUALIFIERS
+
+        sections = self._sections()
+        out = sp._condition_sections_for_level(sections, "beginner")
+        qualifier = LEVEL_QUALIFIERS["beginner"]
+        assert out[0]["search_query"] == f"recursion explained {qualifier}"
+        assert out[1]["search_query"] == f"recursion base case {qualifier}"
+        # other fields preserved
+        assert out[0]["title"] == "T0"
+
+    def test_does_not_mutate_input(self):
+        sections = self._sections()
+        sp._condition_sections_for_level(sections, "advanced")
+        # original (level-agnostic) dicts unchanged -> safe to persist / re-condition
+        assert sections[0]["search_query"] == "recursion explained"
+
+    def test_none_level_is_passthrough(self):
+        sections = self._sections()
+        out = sp._condition_sections_for_level(sections, None)
+        assert out is sections  # untouched, returned as-is
+
+    def test_unrecognized_level_leaves_behavior_unchanged(self):
+        sections = self._sections()
+        out = sp._condition_sections_for_level(sections, "wizard")
+        assert out is sections
+        assert out[0]["search_query"] == "recursion explained"
+
+
 class TestPlanOrchestration:
     def _patch_generation(self, monkeypatch):
         monkeypatch.setattr(sp, "_generate_outline",

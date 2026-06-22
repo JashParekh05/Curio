@@ -7,10 +7,9 @@ import operator
 
 from langgraph.graph import StateGraph, END
 from app.models.schemas import Topic, LearningPath
+from app.services import llm
 
 logger = logging.getLogger(__name__)
-
-MODEL = "gpt-4o-mini"
 
 
 class CurriculumState(TypedDict):
@@ -34,7 +33,7 @@ def _node_understand_intent(state: CurriculumState) -> dict:
     """Classify the user's learning goal before generating a curriculum."""
     client = _groq()
     response = client.chat.completions.create(
-        model=MODEL,
+        model=llm.resolve_model(),
         max_tokens=256,
         messages=[
             {
@@ -144,7 +143,7 @@ Slugs must be lowercase with hyphens. Always return valid JSON."""
 }"""
 
     response = client.chat.completions.create(
-        model=MODEL,
+        model=llm.resolve_model("strong"),
         max_tokens=2048,
         messages=[
             {"role": "system", "content": system},

@@ -16,8 +16,9 @@ import json
 import logging
 import os
 
+from app.services import llm
+
 logger = logging.getLogger(__name__)
-MODEL = "gpt-4o-mini"
 
 # Below this overall story score we log a warning so weak topics are visible for
 # tuning. It does NOT block delivery — a mediocre story still beats no story.
@@ -137,7 +138,7 @@ Return ONLY JSON:
   "order": [<indices in the best storytelling order>],
   "clips": [{{"index": 0, "issue": "<one-line note, empty if strong>"}}]}}"""
     resp = _client().chat.completions.create(
-        model=MODEL, max_tokens=900, temperature=0,
+        model=llm.resolve_model(), max_tokens=900, temperature=0,
         messages=[{"role": "user", "content": prompt}],
     )
     return _derive_overall(json.loads(_strip_json(resp.choices[0].message.content)))

@@ -143,6 +143,48 @@ def _alt_streams_additive_reverse() -> str:
     )
 
 
+def _structured_curriculum_phase1_additive_reverse() -> str:
+    """Recorded reverse step for the structured-curriculum Phase 1 ADDITIVE step.
+
+    Drops exactly the objects ``migration_structured_curriculum_phase1.sql`` adds
+    -- the ``clips.level`` slot column (and its supporting index) and the
+    ``learning_paths.levels`` jsonb projection -- restoring the pre-step schema.
+    Idempotent (drop ... if exists / drop column if exists), additive-step scope
+    only, and leaves every existing clips/learning_paths row otherwise unchanged
+    (Req 5.1, 5.2).
+    """
+    return (
+        "drop index if exists clips_level_idx;\n"
+        "alter table clips drop column if exists level;\n"
+        "alter table learning_paths drop column if exists levels;\n"
+    )
+
+
+def _structured_curriculum_phase2_additive_reverse() -> str:
+    """Recorded reverse step for the structured-curriculum Phase 2 ADDITIVE step.
+
+    Drops exactly the columns ``migration_structured_curriculum_phase2.sql`` adds
+    -- the ``quiz_questions.stage`` checkpoint stage and the
+    ``quiz_questions.section_index`` beat anchor -- restoring the pre-step schema.
+    Idempotent (drop column if exists), additive-step scope only, and leaves every
+    existing quiz_questions row otherwise unchanged (Req 5.1, 5.2).
+    """
+    return (
+        "alter table quiz_questions drop column if exists stage;\n"
+        "alter table quiz_questions drop column if exists section_index;\n"
+    )
+
+
+def _structured_curriculum_phase3_additive_reverse() -> str:
+    """Recorded reverse step for the structured-curriculum Phase 3 ADDITIVE step.
+
+    Drops exactly the object ``migration_structured_curriculum_phase3.sql`` adds
+    -- the ``learning_progress`` table -- restoring the pre-step schema.
+    Idempotent (drop table if exists), additive-step scope only (Req 5.2).
+    """
+    return "drop table if exists learning_progress;\n"
+
+
 @dataclass(frozen=True)
 class StagedStep:
     """A single registered step: its forward SQL file and recorded reverse SQL."""
@@ -171,6 +213,39 @@ MIGRATIONS: dict[str, dict[str, StagedStep]] = {
             step="additive",
             sql_file="migration_alt_streams.sql",
             reverse_sql=_alt_streams_additive_reverse(),
+        ),
+    },
+    # The structured-learn-curriculum Phase 1 migration applied as the additive
+    # step of its OWN Staged_Migration (Req 5.1, 5.2). The gate (can_apply_step)
+    # refuses to apply this step unless a Pre_Migration_Snapshot is recorded, and
+    # the recorded reverse step drops exactly the added columns/index.
+    "structured_curriculum_phase1": {
+        "additive": StagedStep(
+            step="additive",
+            sql_file="migration_structured_curriculum_phase1.sql",
+            reverse_sql=_structured_curriculum_phase1_additive_reverse(),
+        ),
+    },
+    # The structured-learn-curriculum Phase 2 migration applied as the additive
+    # step of its OWN Staged_Migration (Req 5.1, 5.2). The gate (can_apply_step)
+    # refuses to apply this step unless a Pre_Migration_Snapshot is recorded, and
+    # the recorded reverse step drops exactly the added quiz_questions columns.
+    "structured_curriculum_phase2": {
+        "additive": StagedStep(
+            step="additive",
+            sql_file="migration_structured_curriculum_phase2.sql",
+            reverse_sql=_structured_curriculum_phase2_additive_reverse(),
+        ),
+    },
+    # The structured-learn-curriculum Phase 3 migration applied as the additive
+    # step of its OWN Staged_Migration (Req 5.2). The gate (can_apply_step)
+    # refuses to apply this step unless a Pre_Migration_Snapshot is recorded, and
+    # the recorded reverse step drops exactly the added learning_progress table.
+    "structured_curriculum_phase3": {
+        "additive": StagedStep(
+            step="additive",
+            sql_file="migration_structured_curriculum_phase3.sql",
+            reverse_sql=_structured_curriculum_phase3_additive_reverse(),
         ),
     },
 }

@@ -271,6 +271,20 @@ async def create_learning_path(request: Request, req: TopicRequest, background_t
         logger.error(f"[topics] Failed to insert learning_path session={path.session_id}: {e}")
         # Don't block the user — path is still usable even if DB write fails
 
+    # Group the prerequisite-ordered spine path into Levels and persist the
+    # serialized LeveledPath into the nullable learning_paths.levels column
+    # (Phase 1). Best-effort and off the request path: grouping is a pure
+    # partition over the already-generated path (no new LLM call), and a NULL
+    # levels column renders a single implicit level (legacy behavior).
+    try:
+        from app.services.leveled_path_store import store_leveled_path_for_query
+
+        background_tasks.add_task(
+            store_leveled_path_for_query, path.session_id, path.user_query
+        )
+    except Exception as e:
+        logger.warning(f"[topics] Failed to schedule leveled-path grouping session={path.session_id}: {e}")
+
     topics_to_process: list[tuple[str, str]] = []
     for topic in path.topics:
         # Upsert topic row

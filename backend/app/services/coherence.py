@@ -14,10 +14,9 @@ import os
 from typing import Any, get_args
 
 from app.models.schemas import Clip, CoherenceDefect, CoherenceResult, DefectType, PedagogicalRole
+from app.services import llm
 
 logger = logging.getLogger(__name__)
-
-MODEL = "gpt-4o-mini"
 
 _openai_client = None
 
@@ -176,7 +175,7 @@ If no defects are found, return an empty defects array. Be accurate and conserva
 def evaluate(clips: list[Clip]) -> CoherenceResult:
     """LLM shell: evaluate the coherence of the WHOLE ordered clip sequence.
 
-    Prompts gpt-4o-mini to detect: Prerequisite_Gap, Conceptual_Jump,
+    Prompts the configured model to detect: Prerequisite_Gap, Conceptual_Jump,
     Contradiction, Redundancy, and unfilled Pedagogical_Role across the clip
     sequence. Each defect carries defect_type, clip_positions (1-based), and
     role (where applicable, else None).
@@ -205,7 +204,7 @@ def evaluate(clips: list[Clip]) -> CoherenceResult:
     try:
         client = _get_client()
         response = client.chat.completions.create(
-            model=MODEL,
+            model=llm.resolve_model("strong"),
             max_tokens=1024,
             messages=[{"role": "user", "content": prompt}],
         )

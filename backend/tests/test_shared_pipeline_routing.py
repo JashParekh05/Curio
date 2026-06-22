@@ -157,9 +157,10 @@ class _PipelineSpies:
         return admitted, [], "fully_admitted"
 
     # ---- PERSIST (the single clip-writing seam) ----
-    def persist_admitted(self, admitted, topic_slug, coherence_score, provenance):
+    def persist_admitted(self, admitted, topic_slug, coherence_score, provenance, level=None):
         self.order.append("persist")
         self.persist_provenance = provenance
+        self.persist_level = level
         self.persist_admitted_count = len(admitted)
         return len(admitted)
 

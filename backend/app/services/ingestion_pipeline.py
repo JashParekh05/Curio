@@ -262,6 +262,7 @@ def ingest_topic(
     quality_threshold: float = DEFAULT_QUALITY_THRESHOLD,
     fast_preview_limit: int = DEFAULT_FAST_PREVIEW_LIMIT,
     model_call_budget: int = DEFAULT_MODEL_CALL_BUDGET,
+    level: str | None = None,
     now_utc: datetime | None = None,
 ) -> IngestionSummary:
     """Orchestrate DECODE -> MAP -> JUDGE -> ADMIT for one Topic.
@@ -293,6 +294,13 @@ def ingest_topic(
             Fast_Preview (clamped to [1,10]).
         model_call_budget:  Max model calls per Topic per cycle (clamped to
             [1,100]).
+        level:              Optional curriculum Level (one of
+            ``level_filter.LEVELS``) this Topic is being ingested for. When
+            supplied and recognized, each admitted clip is tagged with the
+            resolved Content_Level on the nullable ``clips.level`` column via
+            ``admission_gate.persist_admitted``; when ``None`` / unrecognized,
+            ``clips.level`` is left NULL and the read path defers to the Topic's
+            difficulty (behavior-preserving for existing callers).
         now_utc:            Optional injected clock threaded to the Key_Pool /
             transcript fetch for deterministic callers.
 
@@ -468,7 +476,11 @@ def ingest_topic(
                     mapped, unmapped, verdicts, coherent, aligned
                 )
                 stored = admission_gate.persist_admitted(
-                    admitted, topic_slug, coherence_score, provenance_by_external_id
+                    admitted,
+                    topic_slug,
+                    coherence_score,
+                    provenance_by_external_id,
+                    level=level,
                 )
 
                 total_stored += stored

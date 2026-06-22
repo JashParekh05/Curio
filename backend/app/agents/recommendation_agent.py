@@ -7,10 +7,9 @@ import operator
 
 from langgraph.graph import StateGraph, END
 from app.models.schemas import TopicRecommendation
+from app.services import llm
 
 logger = logging.getLogger(__name__)
-
-MODEL = "gpt-4o-mini"
 
 
 class RecommendationState(TypedDict):
@@ -81,7 +80,7 @@ def _generate_related_topics(path_slugs: list[str]) -> list[dict]:
     client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
     try:
         response = client.chat.completions.create(
-            model=MODEL,
+            model=llm.resolve_model(),
             max_tokens=400,
             messages=[
                 {"role": "system", "content": "You generate educational topic slugs. Return JSON only."},
@@ -246,7 +245,7 @@ def _node_score_and_rank(state: RecommendationState) -> dict:
     }
 
     response = client.chat.completions.create(
-        model=MODEL,
+        model=llm.resolve_model(),
         max_tokens=512,
         messages=[
             {
