@@ -1,4 +1,4 @@
-from app.services.analytics import compute_dropoff, _watch_ratio, topic_dropoff
+from app.services.analytics import compute_dropoff, _watch_ratio, topic_dropoff, rank_clips
 from tests.conftest import FakeDB
 
 
@@ -77,6 +77,59 @@ class TestComputeDropoff:
         events = [{"clip_id": "a", "watch_ms": 30_000, "completed": False}]
         out = compute_dropoff(meta, events)
         assert out[0]["avg_watch_ratio"] is None
+        assert out[0]["views"] == 1
+
+
+class TestRankClips:
+    def _meta(self):
+        return {
+            "good": {"topic_slug": "t", "section_index": 0, "duration_seconds": 60, "title": "Good"},
+            "bad": {"topic_slug": "t", "section_index": 1, "duration_seconds": 60, "title": "Bad"},
+            "rare": {"topic_slug": "u", "section_index": 0, "duration_seconds": 60, "title": "Rare"},
+        }
+
+    def test_empty(self):
+        assert rank_clips(self._meta(), []) == []
+
+    def test_worst_clip_sorts_first(self):
+        # "bad" is watched ~10%, "good" ~100%; both have enough views.
+        events = (
+            [{"clip_id": "good", "watch_ms": 60_000, "completed": True}] * 4
+            + [{"clip_id": "bad", "watch_ms": 6_000, "completed": False}] * 4
+        )
+        out = rank_clips(self._meta(), events, min_views=3)
+        assert [r["clip_id"] for r in out] == ["bad", "good"]
+        assert out[0]["skip_rate"] == 1.0      # all four bailed under 25%
+        assert out[1]["skip_rate"] == 0.0
+        assert out[0]["completion_rate"] == 0.0
+
+    def test_low_view_clips_sink_below_actionable(self):
+        # "rare" is awful but has 1 view; "good" is fine with 4 — good leads.
+        events = (
+            [{"clip_id": "good", "watch_ms": 60_000, "completed": True}] * 4
+            + [{"clip_id": "rare", "watch_ms": 1_000, "completed": False}] * 1
+        )
+        out = rank_clips(self._meta(), events, min_views=3)
+        assert out[0]["clip_id"] == "good"
+        rare = next(r for r in out if r["clip_id"] == "rare")
+        assert rare["low_confidence"] is True
+
+    def test_tallies_feedback_and_ignores_unknown_clips(self):
+        events = [
+            {"clip_id": "good", "watch_ms": 60_000, "completed": True, "feedback": "want_more"},
+            {"clip_id": "good", "watch_ms": 60_000, "completed": True, "feedback": "already_know"},
+            {"clip_id": "ghost", "watch_ms": 1_000, "completed": False},  # no metadata
+        ]
+        out = rank_clips(self._meta(), events, min_views=1)
+        assert len(out) == 1
+        assert out[0]["clip_id"] == "good"
+        assert out[0]["want_more"] == 1 and out[0]["already_know"] == 1
+
+    def test_unmeasurable_clip_has_none_ratio(self):
+        meta = {"x": {"topic_slug": "t", "section_index": 0, "duration_seconds": None, "title": "X"}}
+        out = rank_clips(meta, [{"clip_id": "x", "watch_ms": 5000, "completed": False}], min_views=1)
+        assert out[0]["avg_watch_ratio"] is None
+        assert out[0]["skip_rate"] is None
         assert out[0]["views"] == 1
 
 
