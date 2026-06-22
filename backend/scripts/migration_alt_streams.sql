@@ -5,6 +5,15 @@
 -- existing tables without backfill. Every statement is idempotent (create table
 -- if not exists / add column if not exists). Pre-feature clips carry NULL
 -- provenance and default to the 'youtube' provider, so no backfill is required.
+--
+-- STAGED-MIGRATION ROLE (content-retrieval-revamp Req 8.7, 8.8): this file is the
+-- ADDITIVE step of its OWN Staged_Migration, registered in
+-- scripts/staged_migration.py as MIGRATIONS["alt_streams"]["additive"]. It
+-- creates the provider tables and Clip provenance columns additively and leaves
+-- every existing clips row unchanged. Its recorded reverse step (which drops
+-- exactly the provider tables and provenance columns added below) is recorded
+-- alongside the registration in staged_migration.py (_alt_streams_additive_reverse).
+-- The runner is operator-invoked only and never runs at application startup.
 
 -- 1. Operator-configured Provider_Registry. One row per Content_Provider. The
 --    registry records which providers are enabled, their declared

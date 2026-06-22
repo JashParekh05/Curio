@@ -24,10 +24,19 @@ from datetime import datetime, timezone
 
 from app.db.supabase import get_client
 from app.services.discover_seeding import GRADE_LEVEL_TOPIC_MAP, _GRADE_DIFFICULTY
+from app.services.reseed_prioritizer import (
+    DEFAULT_MINIMUM_VIEWS,
+    DEFAULT_RECUT_THRESHOLD,
+    ClipQualitySignal,
+    WatchQualitySignal,
+    identify_clips_to_reseed,
+    identify_topics_to_reseed,
+)
 from app.services.topic_frontier import (
     MAX_ADJACENT_PER_SEED,
     BacklogItem,
     clamp_priority,
+    enqueue,
     enqueue_adjacent,
 )
 
@@ -287,3 +296,187 @@ def spawn_from_engagement(topic: str) -> list[BacklogItem]:
     Validates: Requirements 3.4, 3.7, 3.8, 3.9
     """
     return _grow_and_persist(topic, "spawn_from_engagement")
+
+
+# ---------------------------------------------------------------------------
+# Telemetry -> reseed loop (Req 7)
+# ---------------------------------------------------------------------------
+
+def _persist_reseed_items(items: list[BacklogItem]) -> bool:
+    """Persist newly enqueued reseed Backlog_Items, reporting success/failure.
+
+    Unlike :func:`upsert_items` (which swallows its result), this returns a bool
+    so the reseed loop can honor Req 7.8: when the write fails the Topic_Frontier
+    state is preserved (nothing was persisted), the items are left for a later
+    retry, and the caller records an error indication. Best-effort: any failure is
+    logged and reported as ``False`` rather than raised.
+    """
+    if not items:
+        return True
+    try:
+        db = get_client()
+        rows = [_item_to_row(item) for item in items]
+        db.table(_TABLE).upsert(rows, on_conflict="topic").execute()
+        return True
+    except Exception as exc:
+        logger.warning(
+            "[backlog] reseed enqueue failed for %d item(s): %s", len(items), exc
+        )
+        return False
+
+
+def _clip_signals_from_rows(rows: list[dict]) -> list[ClipQualitySignal]:
+    """Map ``analytics.worst_clips`` rows to per-Clip Watch_Quality signals.
+
+    Each row's ``avg_watch_ratio`` is the Clip's Watch_Quality and ``views`` is its
+    measured view count; the row's ``topic_slug`` is the Clip's parent Topic, which
+    the reseed Backlog_Item will target (Req 7.7). Rows with no measurable watch
+    ratio (no events / no duration) or no parent Topic are dropped -- there is no
+    signal to act on. The Minimum_Views floor is applied by the pure core, not
+    here, so a single source of truth governs eligibility.
+    """
+    signals: list[ClipQualitySignal] = []
+    for r in rows:
+        ratio = r.get("avg_watch_ratio")
+        slug = r.get("topic_slug")
+        clip_id = r.get("clip_id")
+        if ratio is None or not slug or not clip_id:
+            continue
+        signals.append(ClipQualitySignal(
+            clip_id=clip_id,
+            topic_slug=slug,
+            watch_quality=float(ratio),
+            views=int(r.get("views") or 0),
+        ))
+    return signals
+
+
+def _topic_signals_from_rows(rows: list[dict]) -> list[WatchQualitySignal]:
+    """Roll ``analytics.worst_clips`` rows up to per-Topic Watch_Quality signals.
+
+    Computes each Topic's view-weighted average Watch_Ratio over its measurable
+    Clips -- the same view-weighted rollup ``scripts/diagnose_clips.py`` reports as
+    the "worst topics" list -- so the per-Topic identification in Req 7.2 runs over
+    exactly that signal. Topics are emitted in first-seen row order so the result
+    is deterministic for a deterministic ``worst_clips`` ordering.
+    """
+    acc: dict[str, dict] = {}
+    order: list[str] = []
+    for r in rows:
+        ratio = r.get("avg_watch_ratio")
+        slug = r.get("topic_slug")
+        if ratio is None or not slug:
+            continue
+        views = int(r.get("views") or 0)
+        if slug not in acc:
+            acc[slug] = {"views": 0, "wsum": 0.0}
+            order.append(slug)
+        acc[slug]["views"] += views
+        acc[slug]["wsum"] += float(ratio) * views
+
+    signals: list[WatchQualitySignal] = []
+    for slug in order:
+        a = acc[slug]
+        views = a["views"]
+        quality = (a["wsum"] / views) if views else 0.0
+        signals.append(WatchQualitySignal(
+            topic_slug=slug, watch_quality=quality, views=views
+        ))
+    return signals
+
+
+def reseed_from_telemetry(
+    *,
+    recut_threshold: float = DEFAULT_RECUT_THRESHOLD,
+    minimum_views: int = DEFAULT_MINIMUM_VIEWS,
+    limit: int | None = None,
+) -> dict:
+    """Close the telemetry -> reseed loop: drive the frontier from Watch_Quality.
+
+    This is the thin I/O shell for the Reseed_Prioritizer pure core. It (1) pulls
+    the Watch_Quality signal ``analytics.worst_clips`` already computes from
+    ``clip_events``, (2) calls the pure core to identify the low-Watch_Quality
+    Clips and Topics that clear the Minimum_Views floor and assign each a
+    Reseed_Priority, and (3) merges the resulting reseed Backlog_Items into
+    ``topic_backlog`` through the **existing** :func:`topic_frontier.enqueue`
+    dedupe so a Topic that already has a non-done Backlog_Item is never duplicated
+    (Req 7.4, 7.7). A low-Watch_Quality Clip enqueues a Backlog_Item for its parent
+    Topic (Req 7.7); the pure core has already mapped Clip -> parent Topic, and the
+    shared ``enqueue`` dedupe collapses a Topic identified by several of its Clips
+    (and by the Topic rollup) to a single non-done item.
+
+    Newly enqueued items are persisted in one upsert. IF that write fails, the
+    Topic_Frontier state is preserved (nothing was persisted), the items are left
+    for a later retry, and an error indication is recorded in the returned summary
+    (Req 7.8). The subsequent ``Seeding_Worker.run_once`` then drains these reseed
+    items through ``ingestion_pipeline.ingest_topic`` unchanged (Req 7.5).
+
+    Best-effort: any read failure degrades to a no-op summary so the loop can
+    never block or crash the request path.
+
+    Args:
+        recut_threshold: The Recut_Threshold (valid [0.0, 1.0]).
+        minimum_views: The Minimum_Views floor (valid [1, 100]).
+        limit: Optional cap on the number of ``worst_clips`` rows considered.
+
+    Returns:
+        A summary dict ``{identified, enqueued, error}`` where ``identified`` is the
+        number of distinct Topics identified for reseeding, ``enqueued`` is the
+        number of new non-done Backlog_Items persisted, and ``error`` is ``None`` on
+        success or an indication string when the enqueue write failed.
+
+    Validates: Requirements 7.4, 7.7, 7.8
+    """
+    summary: dict = {"identified": 0, "enqueued": 0, "error": None}
+
+    # Lazy import keeps the analytics DB-touching module off this shell's import
+    # graph until the loop actually runs.
+    from app.services.analytics import worst_clips
+
+    try:
+        rows = worst_clips(min_views=minimum_views, limit=limit)
+    except Exception as exc:
+        logger.warning("[backlog] reseed: worst_clips read failed: %s", exc)
+        summary["error"] = "telemetry_read_failed"
+        return summary
+
+    if not rows:
+        return summary
+
+    # The pure core identifies both Clips (-> parent Topic) and Topics, and assigns
+    # each a Reseed_Priority. Both kinds of result are Topic-targeted Backlog_Items.
+    reseed_items = identify_clips_to_reseed(
+        _clip_signals_from_rows(rows), recut_threshold, minimum_views
+    ) + identify_topics_to_reseed(
+        _topic_signals_from_rows(rows), recut_threshold, minimum_views
+    )
+    if not reseed_items:
+        return summary
+
+    # Merge through the existing dedupe: a Topic with a non-done Backlog_Item is
+    # left unchanged and never duplicated (Req 7.4, 7.7). load_pending returns only
+    # non-done items, which is exactly the dedupe scope the requirement defines.
+    existing = load_pending()
+    existing_topics = {item.topic for item in existing}
+    working = existing
+    for item in reseed_items:
+        working = enqueue(working, item)
+
+    new_items = [item for item in working if item.topic not in existing_topics]
+    summary["identified"] = len({item.topic for item in reseed_items})
+
+    if not new_items:
+        # Everything identified already has a non-done Backlog_Item; nothing to do.
+        return summary
+
+    if _persist_reseed_items(new_items):
+        summary["enqueued"] = len(new_items)
+        logger.info(
+            "[backlog] reseed enqueued %d new topic(s): %s",
+            len(new_items), [item.topic for item in new_items],
+        )
+    else:
+        # Req 7.8: write failed -> frontier preserved, items retained for retry.
+        summary["error"] = "enqueue_failed"
+
+    return summary

@@ -4,6 +4,9 @@ import logging
 
 from app.models.schemas import Clip
 from app.services.feed_scoring import _get_clip_population_stats, _compute_scores, _spread_by_source, DISCOVER_WEIGHTS
+from app.services.arc_unifier import CanonicalArc
+from app.services.arc_unifier_store import load_canonical_arc
+from app.services.clip_ordering import order_clips_by_arc
 
 logger = logging.getLogger(__name__)
 
@@ -81,61 +84,46 @@ def _fetch_clips_for_slug(
     clip_ids = [c.id for c in clips]
     pop_stats = _get_clip_population_stats(db, clip_ids)
     clips = _compute_scores(clips, pop_stats, user_avg_watch_seconds, interest_vector, taste_vector)
-    return _order_by_arc(clips)
+    arc = load_canonical_arc(slug, db)
+    return _order_by_arc(clips, arc)
 
 
-def _order_by_arc(clips: list[Clip]) -> list[Clip]:
-    """Deliver clips in realized-arc order (Req 8.8 / Property 34).
+def _order_by_arc(clips: list[Clip], arc: CanonicalArc | None = None) -> list[Clip]:
+    """Deliver a Topic's clips in one arc-ordered sequence (Req 2.1-2.7).
 
-    Two groups are built and concatenated:
+    Ordering is routed through the single pure core
+    :func:`~app.services.clip_ordering.order_clips_by_arc`. When the Topic has a
+    Canonical_Arc, clips are ordered by Canonical_Arc role ordinal ascending,
+    then within a role by ``final_score`` descending and ascending clip id; any
+    role-less clip sorts after every role-bearing clip (Req 2.1, 2.2, 2.4, 2.5).
+    The legacy ``section_index`` / ``narrative_rank`` branch is gone: a Topic
+    with a Canonical_Arc is ordered exclusively by the one arc path (Req 2.3),
+    and a Topic with no arc yet (``arc is None``) falls through to role-less,
+    score-ordered, stable ordering inside the same core.
 
-    Group 1 — realized-arc clips (role_ordinal is not None):
-        Sorted by role_ordinal (the realized-arc position, 1-based).  Within
-        each role group, clips are ordered by final_score descending then
-        hook_score descending, and _spread_by_source is applied per group so
-        clips from the same video never clump within a role.  The overall
-        output of Group 1 is therefore non-decreasing in role_ordinal,
-        satisfying Property 34.
-
-    Group 2 — pre-feature / legacy clips (role_ordinal is None):
-        Preserves the original section_index / narrative_rank / score ordering
-        for backward compatibility.  These rows come after all Group-1 clips.
-
-    When the entire input consists of pre-feature rows (all role_ordinal=None),
-    the function degrades to the old score-ordered behavior unchanged.
+    ``_spread_by_source`` is applied per role group so clips from the same
+    source video do not clump within a Canonical_Arc role while preserving the
+    core's arc order across roles.
     """
     from itertools import groupby
 
-    arc_clips: list[Clip] = [c for c in clips if c.role_ordinal is not None]
-    legacy_clips: list[Clip] = [c for c in clips if c.role_ordinal is None]
+    ordered = order_clips_by_arc(clips, arc)
 
-    ordered: list[Clip] = []
+    # Source-spread within each contiguous role-ordinal group so clips from the
+    # same source video do not clump, without disturbing the cross-role arc
+    # order produced by the core. Role-less clips (arc role absent) share the
+    # trailing group and are spread together.
+    role_ordinal = {ar.role: ar.ordinal for ar in arc.roles} if arc is not None else {}
 
-    # ── Group 1: realized-arc clips ──────────────────────────────────────────
-    # Sort by role_ordinal so groups are already in arc order.
-    arc_sorted = sorted(arc_clips, key=lambda c: c.role_ordinal)  # type: ignore[arg-type]
-    for _, group in groupby(arc_sorted, key=lambda c: c.role_ordinal):
-        role_group = sorted(
-            group,
-            key=lambda c: (-(c.final_score or c.hook_score or 0.0), -(c.hook_score or 0.0)),
-        )
-        ordered.extend(_spread_by_source(role_group))
+    def _group_key(c: Clip):
+        if c.pedagogical_role is not None and c.pedagogical_role in role_ordinal:
+            return (0, role_ordinal[c.pedagogical_role])
+        return (1, 0)
 
-    # ── Group 2: legacy / pre-feature clips ──────────────────────────────────
-    # Preserve the original section_index → narrative_rank / score ordering so
-    # pre-feature rows behave exactly as before this change.
-    def _beat(c: Clip) -> int:
-        return c.section_index if c.section_index is not None else 1_000_000
-
-    for _, group in groupby(sorted(legacy_clips, key=_beat), key=_beat):
-        beat = list(group)
-        if beat and all(c.narrative_rank is not None for c in beat):
-            ordered.extend(sorted(beat, key=lambda c: c.narrative_rank))
-        else:
-            beat = sorted(beat, key=lambda c: c.final_score or c.hook_score, reverse=True)
-            ordered.extend(_spread_by_source(beat))
-
-    return ordered
+    spread: list[Clip] = []
+    for _, group in groupby(ordered, key=_group_key):
+        spread.extend(_spread_by_source(list(group)))
+    return spread
 
 
 def _fetch_discover_clips(

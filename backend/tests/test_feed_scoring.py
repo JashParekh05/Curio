@@ -139,9 +139,11 @@ class TestSurfaceWeights:
 
 
 class TestOrderByArc:
-    def test_sections_stay_in_order(self):
-        # Section 3 clip has the highest score, but the arc must still lead with
-        # section 0. Engagement only ranks WITHIN a beat, never across beats.
+    def test_section_index_no_longer_drives_order(self):
+        # Req 2.3: the legacy section_index ordering path is removed. With no
+        # Canonical_Arc (and no pedagogical_role), every clip is role-less and
+        # orders by final_score descending — section_index is ignored. The
+        # highest-scoring clip (section 3) therefore leads.
         clips = [
             make_clip(section_index=3, hook_score=0.99, source_url="d"),
             make_clip(section_index=0, hook_score=0.10, source_url="a"),
@@ -151,7 +153,7 @@ class TestOrderByArc:
         for c in clips:
             c.final_score = c.hook_score
         out = _order_by_arc(clips)
-        assert [c.section_index for c in out] == [0, 1, 2, 3]
+        assert [c.section_index for c in out] == [3, 2, 1, 0]
 
     def test_ranks_within_beat_by_score(self):
         # Two clips in the same beat (different sources so spread keeps them
@@ -177,14 +179,17 @@ class TestOrderByArc:
         assert {c.id for c in out} == {c.id for c in clips}
         assert len(out) == len(clips)
 
-    def test_narrative_rank_orders_within_beat_over_score(self):
-        # When a beat is story-ranked, narrative_rank wins over engagement score.
+    def test_narrative_rank_no_longer_orders_within_beat(self):
+        # Req 2.3: the legacy narrative_rank ordering path is removed. With no
+        # Canonical_Arc, role-less clips order by final_score descending and
+        # narrative_rank is ignored, so the higher-scoring clip leads even
+        # though narrative_rank would have wanted the other first.
         hi = make_clip(section_index=1, hook_score=0.9, source_url="x")
         lo = make_clip(section_index=1, hook_score=0.1, source_url="y")
         hi.final_score, lo.final_score = 0.9, 0.1
-        hi.narrative_rank, lo.narrative_rank = 1, 0  # story wants lo first
+        hi.narrative_rank, lo.narrative_rank = 1, 0  # legacy story wanted lo first
         out = _order_by_arc([hi, lo])
-        assert [c.id for c in out] == [lo.id, hi.id]
+        assert [c.id for c in out] == [hi.id, lo.id]  # score order, rank ignored
 
     def test_partial_narrative_rank_falls_back_to_score(self):
         # If any clip in the beat lacks a rank, the beat uses score ordering.

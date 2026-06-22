@@ -5,7 +5,15 @@ thousands of randomized inputs, not just hand-picked happy paths.
 Covers:
   - _popularity_bonus      (bounds, monotonicity, degenerate inputs)
   - _rank_candidates       (permutation, relevance dominance, oracle equality)
-  - _order_by_arc          (arc monotonicity, beat-argmax, no clip loss)
+  - _order_by_arc          (single arc path: no-arc score order, no clip loss)
+
+Note: Req 2.3 collapsed retrieval onto one Canonical_Arc-ordered path and
+removed the legacy section_index / narrative_rank ordering. With no
+Canonical_Arc supplied, ``_order_by_arc`` delivers role-less clips ordered by
+final_score descending then clip id ascending (Req 2.5), then source-spread; it
+no longer orders by section_index. The arc-ordinal ordering invariants are
+covered by tests/test_prop_arc_order_nondecreasing.py and
+tests/test_single_arc_path.py.
 """
 import math
 import re
@@ -221,6 +229,16 @@ def _eff(c):
     return c.final_score or c.hook_score
 
 
+def _core_score(c):
+    # Mirror clip_ordering._clip_score exactly: final_score when set (even 0.0),
+    # else hook_score, else 0.0.
+    if c.final_score is not None:
+        return c.final_score
+    if c.hook_score is not None:
+        return c.hook_score
+    return 0.0
+
+
 class TestOrderByArcProperties:
     @settings(max_examples=400)
     @given(specs=st.lists(
@@ -242,31 +260,37 @@ class TestOrderByArcProperties:
                   _SOURCES),
         min_size=1, max_size=24,
     ))
-    def test_arc_is_non_decreasing_regardless_of_score(self, specs):
-        # THE core invariant: no matter how scores fall, sections never go
-        # backwards. A high-scoring outcomes clip can never jump ahead of a
-        # low-scoring hook clip.
+    def test_no_arc_ignores_section_index(self, specs):
+        # Req 2.3/2.5: with no Canonical_Arc every clip is role-less, so
+        # section_index never constrains the order. The output is purely a
+        # function of score (then id), not of the section beats.
         clips = _arc_clips(specs)
         out = _order_by_arc(list(clips))
-        beats = [_beat_key(c) for c in out]
-        assert beats == sorted(beats)
+        # Re-ordering the same clips by score alone (ignoring section) and then
+        # source-spreading is what the path does; assert section beats are NOT
+        # forced to be sorted (they only would be by coincidence of score).
+        # The robust, deterministic invariant is captured by the distinct-source
+        # strict-score test below; here we just assert no clip loss + that a
+        # higher-scoring late-section clip is allowed to lead.
+        assert sorted(c.id for c in out) == sorted(c.id for c in clips)
 
     @settings(max_examples=400)
-    @given(specs=st.lists(
-        st.tuples(_SECTIONS,
-                  st.floats(min_value=0, max_value=1, allow_nan=False),
-                  _SOURCES),
+    @given(scores=st.lists(
+        st.floats(min_value=0, max_value=1, allow_nan=False),
         min_size=1, max_size=24,
     ))
-    def test_each_beat_leads_with_its_highest_score(self, specs):
-        # Within every beat, the first clip delivered is the highest-scoring one
-        # (the strongest hook leads the beat), even after source-spreading.
-        clips = _arc_clips(specs)
+    def test_no_arc_distinct_sources_is_strict_score_then_id_order(self, scores):
+        # Req 2.5: with no Canonical_Arc and every clip on a distinct source
+        # (so source-spread is an identity), the delivery order is exactly
+        # final_score descending, then clip id ascending.
+        clips = []
+        for i, s in enumerate(scores):
+            c = make_clip(section_index=(i % 4), hook_score=0.5, source_url=f"src-{i}")
+            c.final_score = s
+            clips.append(c)
         out = _order_by_arc(list(clips))
-        from itertools import groupby
-        for _, group in groupby(out, key=_beat_key):
-            g = list(group)
-            assert _eff(g[0]) == max(_eff(c) for c in g)
+        keys = [(-_core_score(c), c.id) for c in out]
+        assert keys == sorted(keys)
 
     @settings(max_examples=200)
     @given(specs=st.lists(
@@ -288,29 +312,36 @@ class TestOrderByArcProperties:
                   _SOURCES),
         min_size=2, max_size=24,
     ))
-    def test_within_beat_distinct_sources_is_strict_score_order(self, specs):
-        # When every clip in a beat has a distinct source, spreading is a no-op,
-        # so the beat must be in strict descending score order.
-        clips = _arc_clips(specs)
+    def test_no_arc_highest_score_leads_when_distinct_sources(self, specs):
+        # Req 2.5: with no Canonical_Arc and distinct sources, the first clip
+        # delivered is the single highest-scoring clip (ties broken by id), with
+        # section_index playing no role.
+        # Force distinct sources so source-spread is an identity.
+        clips = []
+        for i, (sec, score, _src) in enumerate(specs):
+            c = make_clip(section_index=sec, hook_score=0.5, source_url=f"u-{i}")
+            c.final_score = score
+            clips.append(c)
         out = _order_by_arc(list(clips))
-        from itertools import groupby
-        for _, group in groupby(out, key=_beat_key):
-            g = list(group)
-            if len({c.source_url for c in g}) == len(g):  # all distinct sources
-                scores = [_eff(c) for c in g]
-                assert scores == sorted(scores, reverse=True)
+        best = min(clips, key=lambda c: (-_core_score(c), c.id))
+        assert out[0].id == best.id
 
     # --- adversarial fixed cases ------------------------------------------
 
-    def test_top_scoring_outcome_never_precedes_worst_hook(self):
+    def test_no_arc_top_score_leads_regardless_of_section(self):
+        # Req 2.5: with no Canonical_Arc, the highest-scoring clip leads even
+        # though it sits in a "late" section_index; the legacy section ordering
+        # is gone.
         clips = _arc_clips([(3, 1.0, "a"), (0, 0.0001, "b")])
         out = _order_by_arc(clips)
-        assert [c.section_index for c in out] == [0, 3]
+        assert [c.section_index for c in out] == [3, 0]
 
-    def test_none_section_clips_sink_to_the_end(self):
+    def test_no_arc_none_section_is_just_score_order(self):
+        # Req 2.5: section_index None is no longer special without an arc; all
+        # clips are role-less and order purely by score.
         clips = _arc_clips([(None, 0.99, "a"), (2, 0.01, "b"), (0, 0.5, "c")])
         out = _order_by_arc(clips)
-        assert [c.section_index for c in out] == [0, 2, None]
+        assert [c.section_index for c in out] == [None, 0, 2]
 
     def test_all_same_section_is_pure_score_then_spread(self):
         clips = _arc_clips([(1, 0.2, "a"), (1, 0.9, "b"), (1, 0.5, "c")])

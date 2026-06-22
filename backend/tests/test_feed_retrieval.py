@@ -71,11 +71,13 @@ def _db(clips, events=None):
 
 
 class TestFetchClipsForSlug:
-    def test_returns_arc_ordered_across_sections(self):
-        # Section 2 clip has the highest hook; arc must still lead with section 0.
+    def test_orders_by_score_when_no_canonical_arc(self):
+        # Req 2.3: with no Canonical_Arc, the legacy section_index ordering path
+        # is gone — clips are role-less and order by final_score (driven by
+        # hook here) descending, so the highest-hook clip (section 2) leads.
         clips = [_clip("c2", 2, hook=0.99), _clip("c0", 0, hook=0.1), _clip("c1", 1, hook=0.5)]
         out = _fetch_clips_for_slug(_db(clips), "t")
-        assert [c.section_index for c in out] == [0, 1, 2]
+        assert [c.section_index for c in out] == [2, 1, 0]
 
     def test_seen_clips_are_filtered_out(self):
         clips = [_clip("c0", 0), _clip("c1", 1), _clip("c2", 2)]
@@ -90,8 +92,9 @@ class TestFetchClipsForSlug:
         out = _fetch_clips_for_slug(_db(clips), "t")
         assert {c.id for c in out} == {"c0", "c1"}
 
-    def test_narrative_rank_orders_within_beat(self):
-        # Two clips in section 1; narrative_rank should drive their order.
+    def test_narrative_rank_no_longer_orders_within_beat(self):
+        # Req 2.3: with no Canonical_Arc, narrative_rank is ignored and clips
+        # order by final_score (hook) descending across the whole role-less set.
         clips = [
             _clip("hi", 1, hook=0.9, narrative_rank=1),
             _clip("lo", 1, hook=0.1, narrative_rank=0),
@@ -99,8 +102,8 @@ class TestFetchClipsForSlug:
         ]
         out = _fetch_clips_for_slug(_db(clips), "t")
         ids = [c.id for c in out]
-        assert ids[0] == "c0"
-        assert ids.index("lo") < ids.index("hi")  # narrative_rank 0 before 1
+        # score order: hi (0.9) > c0 (0.5) > lo (0.1); narrative_rank ignored.
+        assert ids == ["hi", "c0", "lo"]
 
     def test_empty_topic_returns_empty(self):
         out = _fetch_clips_for_slug(_db([]), "t")

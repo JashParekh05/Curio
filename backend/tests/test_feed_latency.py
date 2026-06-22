@@ -124,8 +124,9 @@ LATENCY_BUDGET_SECONDS = 2.0
 
 
 def test_topic_with_stored_clips_returns_ranked_under_2s_while_generating():
-    # Req 8.6: stored clips across several sections; retrieval+arc ordering must
-    # return the ranked clips well under the 2s budget while generation runs.
+    # Req 8.6: stored clips across several sections; retrieval + single-arc
+    # ordering must return the ranked clips well under the 2s budget while
+    # generation runs.
     clips = [
         _clip("c2", 2, hook=0.99),
         _clip("c0", 0, hook=0.10),
@@ -141,8 +142,10 @@ def test_topic_with_stored_clips_returns_ranked_under_2s_while_generating():
 
     assert out, "expected ranked clips for a topic with stored clips"
     assert {c.id for c in out} == {"c0", "c1", "c2", "c3"}
-    # Arc order leads with section 0 regardless of hook_score.
-    assert [c.section_index for c in out] == [0, 1, 2, 3]
+    # Req 2.3/2.5: no Canonical_Arc -> the legacy section_index ordering path is
+    # gone; clips are role-less and order by final_score (driven by hook here)
+    # descending, so the highest-hook clip (section 2) leads.
+    assert [c.section_index for c in out] == [2, 3, 1, 0]
     assert elapsed < LATENCY_BUDGET_SECONDS, f"retrieval took {elapsed:.3f}s (>= {LATENCY_BUDGET_SECONDS}s)"
 
 
