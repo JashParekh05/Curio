@@ -61,14 +61,62 @@ def _popularity_bonus(view_count: int) -> float:
     return min(math.log10(view_count + 1) / 80.0, 0.1)
 
 
+# Channels we trust to teach well — the named sources Curio's seed hints already
+# lean on (3Blue1Brown, StatQuest, NeetCode...). Stored as normalized keys
+# (lowercase, alphanumeric only), matched as a substring of a candidate's channel
+# title so "StatQuest with Josh Starmer" still hits "statquest". Editable — add
+# the channels you trust. Title matching is cheap but can drift if a channel
+# renames; switch to channelId if that ever bites.
+TRUSTED_CHANNELS = (
+    # CS / DSA / interview prep
+    "neetcode", "abdulbari", "mycodeschool", "williamfiset", "backtobackswe",
+    "tusharroy", "csdojo", "kunalkushwaha", "techdose",
+    # Web / systems / tooling
+    "fireship", "computerphile", "bytebytego", "gauravsen", "husseinnasser",
+    "lowlevellearning", "traversymedia", "theprimeagen", "freecodecamp",
+    # Math
+    "3blue1brown", "khanacademy", "organicchemistrytutor", "professorleonard",
+    # ML / AI
+    "statquest", "andrejkarpathy", "twominutepapers", "deeplearningai",
+    "sentdex", "codeemporium", "serranoacademy",
+    # Science
+    "veritasium", "kurzgesagt", "crashcourse", "pbsspacetime", "scishow",
+    "minutephysics", "teded", "vsauce",
+    # Economics
+    "marginalrevolution",
+)
+
+CHANNEL_BONUS = 0.15
+
+
+def _norm_channel(name: str | None) -> str:
+    return "".join(ch for ch in (name or "").lower() if ch.isalnum())
+
+
+def _channel_bonus(video: dict) -> float:
+    """CHANNEL_BONUS when a candidate is from a TRUSTED_CHANNELS source, else 0.0.
+
+    Deliberately larger than the caption (0.05) and popularity (<=0.1)
+    tiebreakers, so a known teacher wins among comparable candidates and can
+    overcome a SMALL relevance gap — but small enough that a clearly
+    more-relevant video still wins, so a great channel's off-topic upload never
+    beats a perfectly on-topic one."""
+    norm = _norm_channel(video.get("channel_title"))
+    if not norm:
+        return 0.0
+    return CHANNEL_BONUS if any(key in norm for key in TRUSTED_CHANNELS) else 0.0
+
+
 def _rank_candidates(videos: list[dict], query: str) -> list[dict]:
     """Order search candidates by semantic relevance to the section query so the
     best-matching video is transcribed first (instead of YouTube's raw order).
 
-    Relevance is primary. Caption availability and view count are light
-    tiebreakers — a captioned, well-watched video edges out a similarly-relevant
-    one, but popularity never overrides a clearly more relevant video (keeps the
-    feed from collapsing onto the same few viral hits). Best-effort: if
+    Relevance is primary. Caption availability, view count, and whether the
+    video is from a trusted educational channel are bounded tiebreakers — a
+    captioned, well-watched, or trusted-channel video edges out a similarly-
+    relevant one, and a trusted channel can overcome a small relevance gap, but
+    none override a clearly more relevant video (keeps the feed from collapsing
+    onto the same few viral hits). Best-effort: if
     embeddings are unavailable or the candidates carry no text, the original
     order is preserved so this can never make selection worse.
     """
@@ -82,8 +130,9 @@ def _rank_candidates(videos: list[dict], query: str) -> list[dict]:
 
     q_vec = embed_text(query)
     if q_vec is None:
-        # No embeddings: float captioned, then higher-view videos ahead.
-        return sorted(videos, key=lambda v: (0 if v.get("has_caption") else 1,
+        # No embeddings: trusted channels first, then captioned, then higher-view.
+        return sorted(videos, key=lambda v: (-_channel_bonus(v),
+                                             0 if v.get("has_caption") else 1,
                                              -_popularity_bonus(v.get("view_count", 0))))
 
     vecs = embed_texts(texts)
@@ -92,7 +141,7 @@ def _rank_candidates(videos: list[dict], query: str) -> list[dict]:
         v, vec = pair
         sim = cosine_similarity(q_vec, vec) if vec else -1.0
         caption = 0.05 if v.get("has_caption") else 0.0
-        return sim + caption + _popularity_bonus(v.get("view_count", 0))
+        return sim + caption + _popularity_bonus(v.get("view_count", 0)) + _channel_bonus(v)
 
     ranked = sorted(zip(videos, vecs), key=_score, reverse=True)
     order = [v.get("video_id") for v, _ in ranked]

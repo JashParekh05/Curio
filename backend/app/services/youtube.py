@@ -270,6 +270,7 @@ def _search_and_describe(query: str, api_key: str, project_id: str,
         videos.append({
             "video_id": vid_id,
             "title": snippet["title"],
+            "channel_title": snippet.get("channelTitle"),
             "description": snippet.get("description", "")[:200] or None,
             "thumbnail_url": snippet.get("thumbnails", {}).get("high", {}).get("url"),
             "duration_seconds": durations.get(vid_id, 180),
