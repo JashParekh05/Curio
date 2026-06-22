@@ -56,8 +56,9 @@ def test_all_missing_keeps_none(monkeypatch):
 import app.services.embeddings as embeddings
 
 
-def _vid(i, title="", caption=False):
-    return {"video_id": str(i), "title": title, "description": None, "has_caption": caption}
+def _vid(i, title="", caption=False, channel_title=None):
+    return {"video_id": str(i), "title": title, "description": None,
+            "has_caption": caption, "channel_title": channel_title}
 
 
 def _patch_embeddings(monkeypatch, q_vec, vec_by_title):
@@ -102,6 +103,33 @@ class TestRankCandidates:
         out = pipeline_agent._rank_candidates([viral, relevant], "query")
         assert [v["video_id"] for v in out] == ["1", "2"]
 
+    def test_trusted_channel_breaks_ties(self, monkeypatch):
+        # identical relevance; the trusted-channel video should float ahead
+        a = _vid(1, "same", channel_title="Random Uploader")
+        b = _vid(2, "same", channel_title="NeetCode")
+        _patch_embeddings(monkeypatch, [1.0, 0.0], {"same": [0.5, 0.5]})
+        out = pipeline_agent._rank_candidates([a, b], "query")
+        assert [v["video_id"] for v in out] == ["2", "1"]
+
+    def test_trusted_channel_overcomes_small_relevance_gap(self, monkeypatch):
+        # b is slightly more relevant, but a is from a trusted channel and the
+        # gap is within CHANNEL_BONUS -> a wins.
+        a = _vid(1, "near", channel_title="StatQuest with Josh Starmer")
+        b = _vid(2, "verynear", channel_title="Some Rando")
+        _patch_embeddings(monkeypatch, [1.0, 0.0],
+                          {"near": [0.9, 0.2], "verynear": [1.0, 0.0]})
+        out = pipeline_agent._rank_candidates([b, a], "query")
+        assert [v["video_id"] for v in out] == ["1", "2"]
+
+    def test_large_relevance_gap_still_beats_trusted_channel(self, monkeypatch):
+        # a trusted but barely-relevant video must NOT beat a far-more-relevant one
+        trusted = _vid(1, "far", channel_title="3Blue1Brown")
+        relevant = _vid(2, "near", channel_title="Nobody")
+        _patch_embeddings(monkeypatch, [1.0, 0.0],
+                          {"far": [0.1, 0.9], "near": [0.95, 0.05]})
+        out = pipeline_agent._rank_candidates([trusted, relevant], "query")
+        assert [v["video_id"] for v in out] == ["2", "1"]
+
     def test_noop_when_embeddings_unavailable(self, monkeypatch):
         videos = [_vid(1, "a", caption=False), _vid(2, "b", caption=True)]
         monkeypatch.setattr(embeddings, "embed_text", lambda text: None)
@@ -116,6 +144,16 @@ class TestRankCandidates:
         # textless candidates -> unchanged (preserves recall order)
         textless = [{"video_id": "1"}, {"video_id": "2"}]
         assert pipeline_agent._rank_candidates(textless, "query") == textless
+
+
+def test_channel_bonus_matches_normalized_substring():
+    cb = pipeline_agent._channel_bonus
+    assert cb({"channel_title": "StatQuest with Josh Starmer"}) == pipeline_agent.CHANNEL_BONUS
+    assert cb({"channel_title": "3Blue1Brown"}) == pipeline_agent.CHANNEL_BONUS
+    assert cb({"channel_title": "freeCodeCamp.org"}) == pipeline_agent.CHANNEL_BONUS
+    assert cb({"channel_title": "Some Random Channel"}) == 0.0
+    assert cb({"channel_title": None}) == 0.0
+    assert cb({}) == 0.0
 
 
 def test_transcribe_keeps_most_relevant(monkeypatch):
