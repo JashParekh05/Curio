@@ -1,0 +1,62 @@
+# Render Blueprint -- backend web service + offline Seeding_Worker cron job.
+#
+# The cron job runs the cold-start Seeding_Worker on a schedule so the content
+# library keeps growing ahead of demand, without anyone running the script by
+# hand. It reuses the SAME Docker image as the web service, so the worker has
+# the identical code + dependencies; it just runs a different command.
+#
+# The worker is self-pacing and shares the SAME per-project YouTube quota pool
+# (10,000 units/day) as live learn/Discover traffic. The schedule below is
+# deliberately conservative (every 6 hours) so background seeding leaves quota
+# headroom for interactive requests. The worker stops cleanly the moment quota
+# is no longer affordable, so a run that finds the budget spent does nothing.
+#
+# Tune cadence/cap to taste:
+#   * more frequent  -> library grows faster, less quota left for live traffic
+#   * pass a smaller per-run cap -> smaller bites (edit the cron command's arg)
+#
+# Apply with: Render Dashboard -> Blueprints -> New Blueprint Instance (point at
+# this repo). Set the env vars below (or attach an existing env group) so the
+# worker can reach Supabase + YouTube.
+services:
+  - type: web
+    name: edureel-backend
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    plan: starter
+    envVars: &backend_env
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: YOUTUBE_API_KEY
+        sync: false
+      - key: TRANSCRIPT_API_KEY
+        sync: false
+      - key: ALLOWED_ORIGINS
+        sync: false
+      # Multi-project YouTube key pool (per-PROJECT 10k/day quota + failover).
+      # Comma-separated project_id:api_key pairs. When set, supersedes the single
+      # legacy YOUTUBE_API_KEY above. The seeding cron shares this same pool.
+      - key: YT_PROJECTS
+        sync: false
+      # Comma-separated Supabase user ids (JWT sub) allowed to read cross-user
+      # telemetry (engagement-telemetry). Empty = no operators.
+      - key: OPERATOR_USER_IDS
+        sync: false
+
+  - type: cron
+    name: edureel-seeding-worker
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    plan: starter
+    # Every 6 hours (00:00, 06:00, 12:00, 18:00 UTC). Cron expression is UTC.
+    schedule: "0 */6 * * *"
+    # Run one paced pass with the default per-run cap (25 items). Append a number
+    # (e.g. "... scripts.seeding_worker 10") to take smaller bites per run.
+    dockerCommand: python -m scripts.seeding_worker
+    envVars: *backend_env

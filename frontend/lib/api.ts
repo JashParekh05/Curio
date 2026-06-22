@@ -44,6 +44,7 @@ export interface FeedResponse {
   topic_slug: string;
   clips: Clip[];
   processing: boolean;
+  failed?: boolean;
 }
 
 function authHeaders(token: string): Record<string, string> {
@@ -110,6 +111,19 @@ export async function getPathFeed(sessionId: string, token: string): Promise<Fee
   return res.json();
 }
 
+// Fetch a single clip's current metadata for an on-return refresh of the active
+// clip's overlay — no whole-feed refetch. Returns null on 404 so the caller can
+// surface the unavailable/skip path (Req 7.6); any other non-ok response throws
+// so the caller keeps the existing overlay and the clip stays playable (Req 7.4).
+export async function getClipMetadata(clipId: string, token: string): Promise<Clip | null> {
+  const res = await fetch(`${API_BASE}/api/feed/clip/${encodeURIComponent(clipId)}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error("Failed to fetch clip metadata");
+  return res.json();
+}
+
 export interface TopicRecommendation {
   slug: string;
   name: string;
@@ -149,12 +163,23 @@ export async function setUserInterests(userId: string, interests: string[], toke
   if (!res.ok) throw new Error(`Failed to save interests: ${res.status}`);
 }
 
-export async function getDiscoverFeed(userId: string, token: string): Promise<Clip[]> {
+export interface DiscoverFeed {
+  clips: Clip[];
+  // True when the library has no level/interest match yet and cold-start
+  // seeding is still running in the background — the client should keep polling.
+  processing: boolean;
+}
+
+export async function getDiscoverFeed(userId: string, token: string): Promise<DiscoverFeed> {
   const res = await fetch(`${API_BASE}/api/feed/discover/${encodeURIComponent(userId)}`, {
     headers: { Authorization: `Bearer ${token}` },
   });
-  if (!res.ok) return [];
-  return res.json();
+  if (!res.ok) return { clips: [], processing: false };
+  const data = await res.json();
+  // The endpoint returns a { clips, processing } envelope. Stay tolerant of an
+  // older bare-array response shape just in case a stale backend is deployed.
+  if (Array.isArray(data)) return { clips: data, processing: false };
+  return { clips: data.clips ?? [], processing: Boolean(data.processing) };
 }
 
 export function recordClipEvent(

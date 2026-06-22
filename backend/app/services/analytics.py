@@ -10,16 +10,14 @@ wrapper around it.
 """
 import logging
 
+from app.services.telemetry import watch_ratio as _watch_ratio
+
 logger = logging.getLogger(__name__)
 
-
-def _watch_ratio(watch_ms, duration_seconds) -> float | None:
-    """Fraction of a clip watched, capped at 1.0. None when we can't tell."""
-    if not duration_seconds or duration_seconds <= 0:
-        return None
-    if watch_ms is None:
-        return None
-    return min(max(watch_ms / 1000.0 / duration_seconds, 0.0), 1.0)
+# `_watch_ratio` is kept as the module-local name `compute_dropoff` already uses;
+# it now delegates to the single shared definition in `telemetry.watch_ratio` so
+# there is one watch-ratio formula. `compute_dropoff` results are unchanged
+# (Req 6.5).
 
 
 def compute_dropoff(clip_meta: dict[str, dict], events: list[dict]) -> list[dict]:

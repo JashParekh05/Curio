@@ -9,6 +9,10 @@ const CLIPS_KEY = "curio_guest_clips";
 const DISMISSED_KEY = "curio_guest_gate_dismissed";
 
 export const GUEST_GATE_THRESHOLD = 5;
+// Hard wall: once a guest has watched this many clips, watching is blocked until
+// they create an account. The soft banner (GUEST_GATE_THRESHOLD) is a dismissible
+// nudge; this limit is not dismissible. Tune to taste — a single number.
+export const GUEST_HARD_LIMIT = 7;
 export const GUEST_CLIP_EVENT = "curio:guest-clip";
 
 export function getGuestClips(): number {
@@ -31,6 +35,13 @@ export function incrementGuestClips(): number {
 export function isGateDismissed(): boolean {
   if (typeof window === "undefined") return false;
   return localStorage.getItem(DISMISSED_KEY) === "1";
+}
+
+// Hard gate: true once a guest has watched at least GUEST_HARD_LIMIT clips.
+// Independent of the dismissible soft banner — dismissing the nudge does NOT
+// dismiss this. Watching is blocked until the guest upgrades to an account.
+export function isHardGated(): boolean {
+  return getGuestClips() >= GUEST_HARD_LIMIT;
 }
 
 export function dismissGate(): void {

@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { createLearningPath, getUserHistory, getUserProfile, getTopicSections, type LearningPath, type LearningPathSummary, type TopicSection } from "@/lib/api";
 import { hasSeenIntro } from "@/lib/intro";
+import LegalFooter from "@/components/LegalFooter";
 
 const SUGGESTIONS = [
   "I want to learn hashmaps and binary trees",
@@ -92,6 +93,7 @@ export default function Home() {
         >
           Sign in
         </button>
+        <LegalFooter />
       </main>
     );
   }
@@ -341,6 +343,7 @@ export default function Home() {
           </div>
         )}
       </div>
+      <LegalFooter />
     </main>
   );
 }

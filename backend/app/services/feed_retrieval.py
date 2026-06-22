@@ -85,30 +85,56 @@ def _fetch_clips_for_slug(
 
 
 def _order_by_arc(clips: list[Clip]) -> list[Clip]:
-    """Deliver clips as a story: keep the section arc (hook → what → how →
-    outcomes) intact, and let engagement + personalization scores decide the
-    order WITHIN each beat. Spread-by-source is applied per-beat so we never
-    interleave clips across sections (which would scramble the narrative).
+    """Deliver clips in realized-arc order (Req 8.8 / Property 34).
 
-    Clips with no section_index (pre-section fallback) form a single group, so
-    this degrades to the old score-ordered behavior when no arc exists.
+    Two groups are built and concatenated:
+
+    Group 1 — realized-arc clips (role_ordinal is not None):
+        Sorted by role_ordinal (the realized-arc position, 1-based).  Within
+        each role group, clips are ordered by final_score descending then
+        hook_score descending, and _spread_by_source is applied per group so
+        clips from the same video never clump within a role.  The overall
+        output of Group 1 is therefore non-decreasing in role_ordinal,
+        satisfying Property 34.
+
+    Group 2 — pre-feature / legacy clips (role_ordinal is None):
+        Preserves the original section_index / narrative_rank / score ordering
+        for backward compatibility.  These rows come after all Group-1 clips.
+
+    When the entire input consists of pre-feature rows (all role_ordinal=None),
+    the function degrades to the old score-ordered behavior unchanged.
     """
     from itertools import groupby
 
+    arc_clips: list[Clip] = [c for c in clips if c.role_ordinal is not None]
+    legacy_clips: list[Clip] = [c for c in clips if c.role_ordinal is None]
+
+    ordered: list[Clip] = []
+
+    # ── Group 1: realized-arc clips ──────────────────────────────────────────
+    # Sort by role_ordinal so groups are already in arc order.
+    arc_sorted = sorted(arc_clips, key=lambda c: c.role_ordinal)  # type: ignore[arg-type]
+    for _, group in groupby(arc_sorted, key=lambda c: c.role_ordinal):
+        role_group = sorted(
+            group,
+            key=lambda c: (-(c.final_score or c.hook_score or 0.0), -(c.hook_score or 0.0)),
+        )
+        ordered.extend(_spread_by_source(role_group))
+
+    # ── Group 2: legacy / pre-feature clips ──────────────────────────────────
+    # Preserve the original section_index → narrative_rank / score ordering so
+    # pre-feature rows behave exactly as before this change.
     def _beat(c: Clip) -> int:
         return c.section_index if c.section_index is not None else 1_000_000
 
-    ordered: list[Clip] = []
-    for _, group in groupby(sorted(clips, key=_beat), key=_beat):
+    for _, group in groupby(sorted(legacy_clips, key=_beat), key=_beat):
         beat = list(group)
-        # If the story pass has ranked this beat, deliver in that narrative order
-        # (it was composed for flow). Otherwise rank by engagement/personalization
-        # score and spread sources so a beat from two videos doesn't clump.
         if beat and all(c.narrative_rank is not None for c in beat):
             ordered.extend(sorted(beat, key=lambda c: c.narrative_rank))
         else:
             beat = sorted(beat, key=lambda c: c.final_score or c.hook_score, reverse=True)
             ordered.extend(_spread_by_source(beat))
+
     return ordered
 
 

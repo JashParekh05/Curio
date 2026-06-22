@@ -40,11 +40,17 @@ export default function DiscoverPage() {
     const token = session.access_token;
 
     function doFetch() {
-      getDiscoverFeed(user!.id, token).then((c) => {
+      getDiscoverFeed(user!.id, token).then(({ clips: c, processing }) => {
         const fresh = c.filter((clip) => !seenClipIdsRef.current.has(clip.id));
         fresh.forEach((clip) => seenClipIdsRef.current.add(clip.id));
         if (fresh.length > 0) {
           setClips(fresh);
+          setFetching(false);
+          clearInterval(pollRef.current);
+          clearTimeout(coldStartTimeoutRef.current);
+        } else if (!processing) {
+          // Library is settled (nothing generating) and still no clips for us —
+          // stop polling rather than waiting out the full cold-start window.
           setFetching(false);
           clearInterval(pollRef.current);
           clearTimeout(coldStartTimeoutRef.current);
@@ -147,7 +153,7 @@ export default function DiscoverPage() {
     fetchingMoreRef.current = true;
     getDiscoverFeed(user.id, session.access_token)
       .then((more) => {
-        const fresh = more.filter((clip) => !seenClipIdsRef.current.has(clip.id));
+        const fresh = more.clips.filter((clip) => !seenClipIdsRef.current.has(clip.id));
         fresh.forEach((clip) => seenClipIdsRef.current.add(clip.id));
         setClips((prev) => [...prev, ...fresh]);
       })
@@ -298,16 +304,18 @@ export default function DiscoverPage() {
         <button
           onClick={() => goTo(activeIndex - 1)}
           disabled={activeIndex === 0}
-          className="brutal-dark-btn bg-ink w-9 h-9 flex items-center justify-center text-white disabled:opacity-20 disabled:translate-x-0 disabled:translate-y-0 disabled:shadow-brutal-white"
+          aria-label="Previous clip"
+          className="brutal-dark-btn bg-ink w-9 h-9 flex items-center justify-center text-white font-black disabled:opacity-20 disabled:translate-x-0 disabled:translate-y-0 disabled:shadow-brutal-white"
         >
-          ▲
+          ^
         </button>
         <button
           onClick={() => goTo(activeIndex + 1)}
-          disabled={activeIndex >= clips.length}
-          className="brutal-dark-btn bg-ink w-9 h-9 flex items-center justify-center text-white disabled:opacity-20 disabled:translate-x-0 disabled:translate-y-0 disabled:shadow-brutal-white"
+          disabled={activeIndex >= clips.length - 1}
+          aria-label="Next clip"
+          className="brutal-dark-btn bg-ink w-9 h-9 flex items-center justify-center text-white font-black disabled:opacity-20 disabled:translate-x-0 disabled:translate-y-0 disabled:shadow-brutal-white"
         >
-          ▼
+          v
         </button>
       </div>
 
@@ -337,7 +345,7 @@ export default function DiscoverPage() {
             {i === activeIndex ? (
               <ReelPlayer
                 clip={clip}
-                active={true}
+                mode="active"
                 onEnded={() => goTo(i + 1)}
                 onFeedback={(type) => recordClipEvent(clip.id, 0, false, null, 0, type, sessionTokenRef.current)}
               />
@@ -363,7 +371,7 @@ export default function DiscoverPage() {
                 setLoadingMore(true);
                 getDiscoverFeed(user.id, session.access_token)
                   .then((more) => {
-                    const fresh = more.filter((clip) => !seenClipIdsRef.current.has(clip.id));
+                    const fresh = more.clips.filter((clip) => !seenClipIdsRef.current.has(clip.id));
                     fresh.forEach((clip) => seenClipIdsRef.current.add(clip.id));
                     setClips((prev) => [...prev, ...fresh]);
                   })

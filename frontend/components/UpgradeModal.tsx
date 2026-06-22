@@ -3,7 +3,17 @@
 import { useState } from "react";
 import { useAuth } from "@/lib/auth-context";
 
-export default function UpgradeModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+export default function UpgradeModal({
+  open,
+  onClose,
+  blocking = false,
+}: {
+  open: boolean;
+  onClose: () => void;
+  /** When true, the modal cannot be dismissed (no backdrop close, no "Not now")
+   *  until the account is created. Used for the hard guest gate. */
+  blocking?: boolean;
+}) {
   const { upgradeAccount } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -35,7 +45,7 @@ export default function UpgradeModal({ open, onClose }: { open: boolean; onClose
   return (
     <div
       className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-ink/60 px-4"
-      onClick={onClose}
+      onClick={blocking ? undefined : onClose}
     >
       <div
         className="brutal w-full max-w-sm bg-paper p-6 space-y-5 mb-4 sm:mb-0 shadow-brutal-lg"
@@ -49,16 +59,19 @@ export default function UpgradeModal({ open, onClose }: { open: boolean; onClose
               onClick={onClose}
               className="brutal-btn w-full bg-accent-lime text-ink py-3"
             >
-              Done
+              {blocking ? "Keep watching" : "Done"}
             </button>
           </div>
         ) : (
           <>
             <div className="space-y-1">
-              <p className="text-ink text-lg font-black">Save your progress</p>
+              <p className="text-ink text-lg font-black">
+                {blocking ? "Sign up to keep watching" : "Save your progress"}
+              </p>
               <p className="text-ink/70 text-sm font-medium">
-                Create a free account to keep your learning history across devices. Your current
-                progress carries over.
+                {blocking
+                  ? "You've hit the free preview limit. Create a free account to keep watching — your progress carries over."
+                  : "Create a free account to keep your learning history across devices. Your current progress carries over."}
               </p>
             </div>
             <form onSubmit={handleSubmit} className="space-y-3">
@@ -88,9 +101,18 @@ export default function UpgradeModal({ open, onClose }: { open: boolean; onClose
               </button>
               {error && <div className="brutal bg-accent-pink text-white text-sm font-bold px-3 py-2 text-center">{error}</div>}
             </form>
-            <button onClick={onClose} className="w-full text-ink/50 hover:text-ink text-sm font-bold transition">
-              Not now
-            </button>
+            {blocking ? (
+              <a
+                href="/login"
+                className="block w-full text-center text-ink/50 hover:text-ink text-sm font-bold transition"
+              >
+                Already have an account? Log in
+              </a>
+            ) : (
+              <button onClick={onClose} className="w-full text-ink/50 hover:text-ink text-sm font-bold transition">
+                Not now
+              </button>
+            )}
           </>
         )}
       </div>

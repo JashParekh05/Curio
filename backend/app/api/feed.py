@@ -1,8 +1,9 @@
 import asyncio
 import logging
+from datetime import datetime, timezone
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from app.rate_limit import limiter
-from app.models.schemas import Clip, ClipEvent, FeedResponse, TopicRecommendation
+from app.models.schemas import Clip, ClipEvent, FeedResponse, TopicRecommendation, DiscoverResponse
 from app.db.supabase import get_client
 from app.auth import require_user
 
@@ -22,6 +23,15 @@ from app.services.discover_seeding import (
     _GRADE_DIFFICULTY,
 )
 from app.services.path_extension import _should_extend, _extend_path, _LOW_CLIPS_THRESHOLD
+from app.services.level_filter import (
+    derive_content_level,
+    rank_by_level,
+    exclude_below,
+    fallback_order,
+)
+from app.services import self_heal_state
+from app.services.telemetry import build_impressions
+from app.services.impression_store import record_impressions
 from app.services.topic_expansion import (
     _is_expansion_candidate,
     _should_expand_topic,
@@ -32,6 +42,38 @@ from app.services.topic_expansion import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/feed", tags=["feed"])
+
+
+def _schedule_impressions(
+    background_tasks: BackgroundTasks,
+    clips: list[Clip],
+    *,
+    feed_surface: str,
+    session_id: str | None,
+    user_id: str | None,
+) -> None:
+    """Best-effort, non-blocking serve hook: build Impressions for the served,
+    ordered clip list and schedule the write as a BackgroundTask.
+
+    Wraps the whole build + schedule in try/except so that building or scheduling
+    Impressions can NEVER affect the already-prepared feed response — the feed is
+    returned regardless of any telemetry failure (Req 2.1, 2.2, 2.3). The serve
+    time is captured here as `datetime.now(timezone.utc)` and injected into the
+    pure `build_impressions` core, and the actual insert runs after the response
+    is sent via `record_impressions` (Req 1.1).
+    """
+    try:
+        impressions = build_impressions(
+            clips,
+            feed_surface=feed_surface,
+            session_id=session_id,
+            user_id=user_id,
+            served_at=datetime.now(timezone.utc),
+        )
+        if impressions:
+            background_tasks.add_task(record_impressions, impressions)
+    except Exception as e:
+        logger.warning(f"[feed] Failed to schedule impressions for surface={feed_surface}: {e}")
 
 
 @router.get("/path/{session_id}", response_model=list[FeedResponse])
@@ -157,7 +199,9 @@ async def get_path_feed(session_id: str, background_tasks: BackgroundTasks, call
         # have a few clips while more are still on the way; reporting it done too
         # early makes the frontend stop polling and the user gets stuck.
         is_generating = slug in generating_slugs
-        if not clips and not is_generating:
+        attempts, last_age = self_heal_state.read(slug)
+        has_clips = bool(clips)
+        if self_heal_state.should_self_heal(has_clips, is_generating, attempts, last_age):
             missing_slugs.append(slug)
 
         # Endless expansion: an engaged viewer running low on unseen clips for
@@ -168,10 +212,12 @@ async def get_path_feed(session_id: str, background_tasks: BackgroundTasks, call
                 and _should_expand_topic(session_id, slug)):
             expand_slugs.append(slug)
 
+        failed = self_heal_state.is_terminal_failed(has_clips, is_generating, attempts)
         feeds.append(FeedResponse(
             topic_slug=slug,
             clips=clips,
-            processing=is_generating or len(clips) == 0,
+            processing=is_generating or (not has_clips and not failed),
+            failed=failed,
         ))
 
     # Self-heal: if a topic has no clips and nothing is generating it (e.g. the
@@ -217,7 +263,7 @@ async def get_path_feed(session_id: str, background_tasks: BackgroundTasks, call
             if c.id not in seen_clip_ids:
                 seen_clip_ids.add(c.id)
                 unique.append(c)
-        deduped_feeds.append(FeedResponse(topic_slug=f.topic_slug, clips=unique, processing=f.processing))
+        deduped_feeds.append(FeedResponse(topic_slug=f.topic_slug, clips=unique, processing=f.processing, failed=f.failed))
 
     # Auto-extend the path when user is running low on unseen clips.
     # Skip if any topic is still processing — pipelines may still deliver clips.
@@ -227,7 +273,21 @@ async def get_path_feed(session_id: str, background_tasks: BackgroundTasks, call
         background_tasks.add_task(_extend_path, session_id)
         logger.info(f"[feed] session={session_id} low on clips ({total_unseen}); queued path extension")
 
-    return _interleave_topics(deduped_feeds)
+    # Serve hook (best-effort, non-blocking): the interleaved feeds are the final
+    # ordered set the learner sees. _interleave_topics returns FeedResponse objects,
+    # so flatten to the ordered Clip sequence for Feed_Position assignment. The
+    # session-ownership 403 check above already gates this; user_id is the resolved
+    # path owner.
+    served = _interleave_topics(deduped_feeds)
+    ordered_clips = [clip for feed in served for clip in feed.clips]
+    _schedule_impressions(
+        background_tasks,
+        ordered_clips,
+        feed_surface="learn_path",
+        session_id=session_id,
+        user_id=path.data[0].get("user_id"),
+    )
+    return served
 
 
 @router.get("/recommendations/{session_id}", response_model=list[TopicRecommendation])
@@ -252,6 +312,34 @@ async def get_recommendations(session_id: str, caller_id: str = Depends(require_
 
     from app.agents.recommendation_agent import run_recommendations
     return await asyncio.to_thread(run_recommendations, session_id, path_slugs)
+
+
+@router.get("/clip/{clip_id}", response_model=Clip)
+async def get_clip(clip_id: str, caller_id: str = Depends(require_user)):
+    """Single-clip metadata source for refresh-on-return: return current metadata
+    for exactly one clip. Auth via require_user like every other feed route. 404
+    when the clip no longer exists so the client surfaces the unavailable state.
+
+    Declared BEFORE `/{topic_slug}` so the literal `clip/` segment is never
+    captured as a topic slug.
+    """
+    db = get_client()
+    try:
+        result = (
+            db.table("clips")
+            .select("id,topic_slug,title,description,video_url,thumbnail_url,duration_seconds,source_url,source_platform,hook_score,created_at,section_index")
+            .eq("id", clip_id)
+            .limit(1)
+            .execute()
+        )
+    except Exception as e:
+        logger.error(f"[feed] Failed to fetch clip {clip_id}: {e}")
+        raise HTTPException(status_code=503, detail="Clip lookup failed")
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Clip not found")
+    row = result.data[0]
+    row.setdefault("hook_score", 0.5)
+    return Clip(**row)
 
 
 @router.get("/{topic_slug}", response_model=FeedResponse)
@@ -285,7 +373,7 @@ async def get_feed(
     return FeedResponse(topic_slug=topic_slug, clips=clips, processing=len(clips) == 0)
 
 
-@router.get("/discover/{user_id}", response_model=list[Clip])
+@router.get("/discover/{user_id}", response_model=DiscoverResponse)
 async def get_discover_feed(user_id: str, background_tasks: BackgroundTasks, limit: int = Query(20, le=50), caller_id: str = Depends(require_user)):
     if caller_id != user_id:
         raise HTTPException(status_code=403, detail="Access denied")
@@ -303,6 +391,23 @@ async def get_discover_feed(user_id: str, background_tasks: BackgroundTasks, lim
     user_interest_vector: dict[str, float] = p.get("interest_vector") or {}
     grade_level: str = p.get("grade_level") or "high_school"
 
+    # Cold start: no behavioral taste yet — derive a taste vector from the user's
+    # onboarding interests so discovery is personalized from interests alone
+    # (semantic ranking + semantic scoring), no watch history required.
+    if taste_vector is None and interests:
+        from app.services.embeddings import embed_text
+        taste_vector = embed_text(" ".join(interests))
+
+    # Per_User_Topup: ALWAYS schedule the existing _seed_topics_bg path as a
+    # background task so the library keeps growing from grade-aligned interest
+    # seeds. It is never awaited on the request path and so can never block or
+    # hang the Discover response; shortfalls in the served feed are filled now
+    # via the Level_Filter soft fallback below and topped up later by this seed.
+    if interests:
+        seed_slugs = _interest_seed_slugs(interests, grade_level)
+        if seed_slugs:
+            background_tasks.add_task(_seed_topics_bg, seed_slugs, _GRADE_DIFFICULTY.get(grade_level, "intermediate"))
+
     # Build seen_ids from all sessions — single batched query
     seen_ids: set[str] = set()
     try:
@@ -319,7 +424,7 @@ async def get_discover_feed(user_id: str, background_tasks: BackgroundTasks, lim
         all_slugs = [t["slug"] for t in all_topics.data]
     except Exception as e:
         logger.error(f"[feed] Failed to fetch topics for discover user={user_id}: {e}")
-        return []
+        return DiscoverResponse(clips=[], processing=True)
     # Restrict discovery to topics that actually have clips, so the feed is both
     # relevant AND populated. Grade-map seed slugs are mostly empty placeholders,
     # which is why discovery used to fall back to generic top-hook clips.
@@ -331,20 +436,17 @@ async def get_discover_feed(user_id: str, background_tasks: BackgroundTasks, lim
         logger.warning(f"[feed] Failed to fetch populated slugs for discover user={user_id}: {e}")
         candidate_slugs = all_slugs
 
-    # Cold start: no behavioral taste yet — derive a taste vector from the user's
-    # onboarding interests so discovery is personalized from interests alone
-    # (semantic ranking + semantic scoring), no watch history required.
-    if taste_vector is None and interests:
-        from app.services.embeddings import embed_text
-        taste_vector = embed_text(" ".join(interests))
-        # Keep growing the library in the background from grade-aligned seeds.
-        seed_slugs = _interest_seed_slugs(interests, grade_level)
-        if seed_slugs:
-            background_tasks.add_task(_seed_topics_bg, seed_slugs, _GRADE_DIFFICULTY.get(grade_level, "intermediate"))
-
     relevant_slugs = _match_interest_slugs(interests, candidate_slugs, taste_vector=taste_vector)
 
     clips = _fetch_discover_clips(db, relevant_slugs, candidate_slugs, seen_ids, limit, interest_vector=user_interest_vector, taste_vector=taste_vector)
+
+    # Level-aware ranking (stage 2): the user's exact Content_Level leads, with
+    # below-level clips dropped while a match exists. rank_by_level is a stable
+    # sort, so the personalized order from _fetch_discover_clips is preserved
+    # WITHIN each level group — level dominates, personalization is the tiebreak.
+    user_level = derive_content_level(grade_level)
+    clips = exclude_below(clips, user_level)
+    clips = rank_by_level(clips, user_level)
 
     # Global fallback: seed topics are still generating — return best available clips from any topic.
     # Over-fetch so we still surface UNSEEN clips for returning users who've already watched the
@@ -359,16 +461,32 @@ async def get_discover_feed(user_id: str, background_tasks: BackgroundTasks, lim
                 .limit(limit * 5)
                 .execute()
             )
+            # Build the best-available candidate pool of UNSEEN clips, then order
+            # by level distance (nearest-higher then nearest-lower) instead of
+            # hook_score so a mis-leveled clip never leads the fallback feed.
+            candidates: list[Clip] = []
             for row in fallback.data:
-                if len(clips) >= limit:
-                    break
                 if row["id"] not in seen_ids and row["id"] not in already:
                     row.setdefault("hook_score", 0.5)
-                    clips.append(Clip(**row))
+                    candidates.append(Clip(**row))
+            for clip in fallback_order(candidates, user_level):
+                if len(clips) >= limit:
+                    break
+                clips.append(clip)
         except Exception as e:
             logger.warning(f"[feed] Global fallback query failed for user={user_id}: {e}")
 
-    return clips
+    # Instant_Feed envelope: an empty feed signals the library has no level/
+    # interest match yet and the background Per_User_Topup is generating content,
+    # so the client can show a processing state instead of hanging (Req 5.6).
+    _schedule_impressions(
+        background_tasks,
+        clips,
+        feed_surface="discover",
+        session_id=None,
+        user_id=user_id,
+    )
+    return DiscoverResponse(clips=clips, processing=len(clips) == 0)
 
 
 @router.post("/{clip_id}/events", status_code=204)

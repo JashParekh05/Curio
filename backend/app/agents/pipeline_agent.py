@@ -24,94 +24,29 @@ class PipelineState(TypedDict):
 
 
 def _node_search(state: PipelineState) -> dict:
-    import os, requests
-    from app.services.youtube import search_cache_get, search_cache_put
+    # All YouTube quota spending lives in youtube.youtube_search — the single
+    # charge site. It is cache-first (a youtube_search_cache hit costs 0 units
+    # and never touches the quota pool), selects an affordable Google Cloud
+    # project, charges the 100-unit search BEFORE the API call, then performs
+    # videos.list (1 unit) and caches the result. This node only orchestrates;
+    # it no longer issues HTTP requests or re-checks the cache itself (avoiding
+    # a redundant double cache read), and returns the same external contract.
+    from app.services.youtube import youtube_search
 
     query = state.get("search_query") or f"{state['topic_name']} explained"
 
-    # Serve from cache when possible — a YouTube search costs 100 quota units
-    # (10k/day free). Caching by query means re-testing the same topics is free.
-    cached = search_cache_get(query)
-    if cached:
-        logger.info(f"[pipeline_agent] search cache hit: query='{query}' ({len(cached)} videos, 0 units)")
-        return {"videos": cached}
-
-    api_key = os.environ.get("YOUTUBE_API_KEY", "")
-    if not api_key:
-        return {"errors": ["YOUTUBE_API_KEY not set"], "videos": []}
-
-    logger.info(f"[pipeline_agent] search: topic={state['topic_slug']} section={state.get('section_index')} query='{query}' (~100 units)")
-
-    search = requests.get(
-        "https://www.googleapis.com/youtube/v3/search",
-        params={
-            "key": api_key,
-            "q": query,
-            "type": "video",
-            # "medium" = 4-20 min. The section planner writes queries targeting a
-            # focused 5-10 min explainer; "short" (<4 min) filtered those out and
-            # contradicted the query intent, starving segmentation of substance.
-            "videoDuration": "medium",
-            "videoEmbeddable": "true",
-            "safeSearch": "strict",
-            "relevanceLanguage": "en",
-            "maxResults": 6,
-            "part": "snippet",
-        },
-        timeout=10,
+    logger.info(
+        f"[pipeline_agent] search: topic={state['topic_slug']} "
+        f"section={state.get('section_index')} query='{query}'"
     )
-    if not search.ok:
-        return {"errors": [f"YouTube search failed: {search.status_code}"], "videos": []}
 
-    items = search.json().get("items", [])
-    if not items:
+    videos = youtube_search(query)
+    if videos is None:
+        # No project could afford the search (or none configured): nothing spent.
+        return {"errors": ["YouTube search unavailable: no affordable quota"], "videos": []}
+    if not videos:
         return {"errors": [f"No results for {state['topic_slug']}"], "videos": []}
 
-    video_ids = [i["id"]["videoId"] for i in items]
-    details = requests.get(
-        "https://www.googleapis.com/youtube/v3/videos",
-        params={"key": api_key, "id": ",".join(video_ids), "part": "contentDetails,snippet,statistics"},
-        timeout=10,
-    )
-    logger.info(f"[pipeline_agent] videos.list (~1 unit)")
-
-    durations: dict[str, int] = {}
-    captions: dict[str, bool] = {}
-    views: dict[str, int] = {}
-    if details.ok:
-        import re
-        for v in details.json().get("items", []):
-            cd = v.get("contentDetails", {})
-            m = re.match(r"PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?", cd.get("duration", ""))
-            if m:
-                h, mn, s = (int(x or 0) for x in m.groups())
-                durations[v["id"]] = h * 3600 + mn * 60 + s
-            # Uploader-provided caption flag. NOTE: this is False for videos that
-            # only have YouTube auto-generated captions, which TranscriptAPI can
-            # still fetch — so we use it as a soft ranking bonus, never a filter.
-            captions[v["id"]] = cd.get("caption") == "true"
-            try:
-                views[v["id"]] = int(v.get("statistics", {}).get("viewCount", 0))
-            except (TypeError, ValueError):
-                views[v["id"]] = 0
-
-    videos = []
-    for item in items:
-        vid_id = item["id"]["videoId"]
-        snippet = item["snippet"]
-        videos.append({
-            "video_id": vid_id,
-            "title": snippet["title"],
-            "channel_title": snippet.get("channelTitle"),
-            "description": snippet.get("description", "")[:200] or None,
-            "thumbnail_url": snippet.get("thumbnails", {}).get("high", {}).get("url"),
-            "duration_seconds": durations.get(vid_id, 180),
-            "has_caption": captions.get(vid_id, False),
-            "view_count": views.get(vid_id, 0),
-        })
-
-    if videos:
-        search_cache_put(query, videos)
     return {"videos": videos}
 
 
@@ -279,6 +214,10 @@ def _node_segment(state: PipelineState) -> dict:
         if v.get("transcript"):
             try:
                 segments = _identify_segments(v["transcript"], topic_slug, section_context)
+            except Exception as exc:
+                logger.warning(f"[pipeline_agent] segment failed {vid_id}: {exc}")
+                segments = []
+            if segments:
                 for seg in segments:
                     clips.append({
                         **base,
@@ -289,8 +228,10 @@ def _node_segment(state: PipelineState) -> dict:
                         "transcript": seg.get("transcript"),
                         "hook_score": seg.get("hook_score", 0.5),
                     })
-            except Exception as exc:
-                logger.warning(f"[pipeline_agent] segment failed {vid_id}: {exc}")
+            else:
+                # Graceful fallback: a transient empty segmentation (LLM error /
+                # unparseable JSON) must still yield the base clip, not zero.
+                logger.warning(f"[pipeline_agent] segmentation empty for {vid_id}; using base clip")
                 clips.append(base)
         else:
             clips.append(base)
@@ -353,7 +294,34 @@ def run_pipeline(
     section_title/section_description/arc_titles give the segmenter narrative
     context so a section's clips form a connected mini-story; they're optional
     so non-section callers (discover seeding, recommendations) are unaffected.
+
+    Routing (task 11.1): a WHOLE-TOPIC call (``section_index is None``) is routed
+    through the shared Ingestion_Pipeline (``ingestion_pipeline.ingest_topic`` ->
+    DECODE -> MAP -> JUDGE -> ADMIT) -- the SAME path the cold-start Seeding_Worker
+    uses -- so on-demand topics produce plan-mapped, coherence/alignment-checked,
+    per-segment-judged Admitted_Clips instead of raw hand-picked segments
+    (Req 5.1, 7.3). ``ingest_topic`` is best-effort end to end, drives the
+    Planned_Arc + the single ``youtube.youtube_search`` charge site itself, and
+    returns an ``IngestionSummary`` whose ``stored`` is the Admitted_Clip count.
+
+    A SECTION-BASED call (``section_index is not None``, e.g. per-beat planning
+    from ``topics.py``) KEEPS the existing LangGraph pipeline below unchanged, so
+    per-section narrative generation is not broken (``ingest_topic`` does a
+    whole-topic ingestion and is not section-aware).
+
+    Imported lazily inside the function to avoid an import-time cycle
+    (services -> ... -> pipeline_agent).
     """
+    if section_index is None:
+        from app.services.ingestion_pipeline import ingest_topic
+
+        summary = ingest_topic(topic_slug, topic_name)
+        logger.info(
+            f"[pipeline_agent] whole-topic '{topic_slug}' routed through "
+            f"ingest_topic: outcome={summary.outcome} stored={summary.stored}"
+        )
+        return summary.stored
+
     global _pipeline_graph
     if _pipeline_graph is None:
         _pipeline_graph = build_pipeline_graph()

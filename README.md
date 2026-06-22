@@ -20,8 +20,28 @@ best 45–90 second explanations out of YouTube videos into a TikTok-style feed.
 7. The **feed** ranks clips with a multi-signal scorer and serves them; user behavior
    (watch time, 🔥/✓, skips) updates per-session and per-user preference vectors online.
 
+Layered on top of those two pipelines:
+
+- **Cold-start seeding** — a self-pacing cron worker grows the library ahead of
+  demand from a persisted topic backlog, sharing a **multi-project** YouTube
+  quota pool (per-project 10k/day, fail-closed accounting) so common queries
+  serve instantly.
+- **Deep content ingestion** — a DECODE → BREAK-DOWN → MAP → JUDGE → ADMIT
+  pipeline that reasons about a source video before admitting clips, for
+  higher-value topics.
+- **Engagement telemetry** — captures *what was served* (impressions), not just
+  what was watched, reconstructs per-session/per-user journeys, and rolls up
+  engagement by slice. Cross-user reads are gated behind an operator allowlist.
+- **Active-learning quiz** — per-topic MCQs with mastery tracking.
+
 See **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** for the full ingestion/serving
-pipeline, caching layers, and ML detail.
+pipeline, the three subsystems above, caching layers, ML detail, and a
+**limitations & scaling roadmap**.
+
+> **Design convention.** Every subsystem is a **pure decision core** (no DB,
+> clock, or globals — Hypothesis property-tested) wrapped by a **thin best-effort
+> I/O shell** that never blocks the request path and, where spend is involved,
+> fails closed.
 
 ## Stack
 
@@ -29,7 +49,7 @@ pipeline, caching layers, and ML detail.
 |---|---|
 | LLM (curriculum, segmentation, ranking) | OpenAI `gpt-4o-mini` |
 | Transcripts | [TranscriptAPI.com](https://transcriptapi.com) |
-| Video discovery | YouTube Data API v3 |
+| Video discovery | YouTube Data API v3 (multi-project quota pool via `YT_PROJECTS`) |
 | Clips | YouTube embeds with `start`/`end` timestamps (no download/hosting) |
 | Embeddings | `sentence-transformers/all-MiniLM-L6-v2` (384-dim, local) |
 | Agents | LangGraph (curriculum, pipeline, recommendation) |
@@ -58,7 +78,17 @@ uvicorn app.main:app --reload --port 8000
 scripts/migration_pgvector.sql
 scripts/migration_sections.sql        # topic_sections table
 scripts/migration_grade_level.sql     # user_profiles.grade_level
+scripts/migration_cold_start.sql      # project_quota_usage + RPC, topic_backlog, clips.content_level
+scripts/migration_telemetry.sql       # impressions table (engagement telemetry)
 ```
+
+> **Required, not optional.** `migration_cold_start.sql` creates the
+> `project_quota_usage` table and `increment_quota_usage` RPC. The YouTube quota
+> charge site **fails closed**: if that table is missing, every search is treated
+> as unaffordable and *no* clips are generated anywhere (learn page or Discover).
+> If feeds hang on "processing" and logs show
+> `Could not find the table 'public.project_quota_usage'`, this migration hasn't
+> been run.
 
 Plus the cache tables + feedback column:
 
@@ -105,6 +135,37 @@ python -m scripts.bulk_seed                           # bulk-seed from a CSV of 
 python -m scripts.backfill_embeddings                 # embed any clips missing a vector
 ```
 
+### Offline seeding worker (cron)
+
+The `Seeding_Worker` grows the cold-start library ahead of demand by draining the
+persisted `topic_backlog` (Topic_Frontier) one paced chunk at a time. It is
+self-pacing and resumable, and never overspends the per-project YouTube quota, so
+it's safe to run on a schedule.
+
+```bash
+cd backend
+python -m scripts.seeding_worker            # one paced pass, default cap (25 items)
+python -m scripts.seeding_worker 10         # process at most 10 items this run
+scripts/run_seeding_worker.sh               # cron wrapper: venv + lock + logging
+```
+
+**Production (Render):** `render.yaml` defines an `edureel-seeding-worker` cron
+job that runs `python -m scripts.seeding_worker` every 6 hours using the same
+Docker image as the web service. Apply via Render → Blueprints.
+
+**Local / any server (crontab):** the wrapper resolves its own paths, prefers the
+project venv, holds a single-instance lock, and logs to `backend/logs/`:
+
+```cron
+# every 6 hours
+0 */6 * * * /Users/jbparekh/edureel/backend/scripts/run_seeding_worker.sh
+```
+
+> The worker shares the same 10,000 units/day quota pool as live learn/Discover
+> traffic. Keep the cadence conservative (every few hours) so background seeding
+> leaves quota headroom for interactive requests; a run that finds the budget
+> spent stops cleanly having done nothing.
+
 ### Tests
 
 ```bash
@@ -124,7 +185,9 @@ bounding, and vector math. DB-dependent endpoints aren't covered (no Supabase mo
 |---|---|
 | `OPENAI_API_KEY` | [platform.openai.com](https://platform.openai.com) |
 | `TRANSCRIPT_API_KEY` | [transcriptapi.com](https://transcriptapi.com) |
-| `YOUTUBE_API_KEY` | YouTube Data API v3 ([console.cloud.google.com](https://console.cloud.google.com)) |
+| `YOUTUBE_API_KEY` | YouTube Data API v3 ([console.cloud.google.com](https://console.cloud.google.com)) — legacy single key |
+| `YT_PROJECTS` | Multi-project pool: comma-separated `project_id:api_key` pairs. Supersedes `YOUTUBE_API_KEY`. Each `project_id` is a stable label for one Google Cloud project (quota is per project, 10k/day) |
+| `OPERATOR_USER_IDS` | Comma-separated Supabase auth user UUIDs (JWT `sub`) allowed to read cross-user telemetry. Empty = no operators |
 | `SUPABASE_URL` + `SUPABASE_KEY` | Supabase → Settings → API (use the **secret** key, not publishable) |
 | `ALLOWED_ORIGINS` | comma-separated CORS origins (e.g. your Vercel URL) |
 
@@ -148,3 +211,10 @@ bounding, and vector math. DB-dependent endpoints aren't covered (no Supabase mo
 | `/api/feed/{clip_id}/events` | POST | Record watch/feedback telemetry |
 | `/api/users/{user_id}/profile` | GET | User profile (interests, grade, onboarding) |
 | `/api/users/{user_id}/interests` | POST | Save onboarding interests |
+| `/api/analytics/dropoff/{topic_slug}` | GET | Per-beat retention funnel for a topic |
+| `/api/analytics/journey/session/{session_id}` | GET | Reconstructed session journey (operator/self) |
+| `/api/analytics/journey/user/{user_id}` | GET | Cross-session user journey (operator/self) |
+| `/api/analytics/rollup/{dimension}` | GET | Engagement rollup by slice (operator) |
+| `/api/quiz/{topic_slug}` | GET | Cached MCQs for a topic (self-heals if missing) |
+| `/api/quiz/{question_id}/answer` | POST | Record an answer, recompute mastery |
+| `/api/quiz/mastery/{user_id}` | GET | Per-topic mastery summary + total points |

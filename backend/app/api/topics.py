@@ -5,6 +5,7 @@ from app.models.schemas import TopicRequest, LearningPath
 from app.db.supabase import get_client
 from app.auth import require_user
 from app.rate_limit import limiter
+from app.services import self_heal_state
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/topics", tags=["topics"])
@@ -17,9 +18,13 @@ generating_slugs: set[str] = set()
 
 async def _process_single_topic(slug: str, name: str) -> None:
     from app.agents.pipeline_agent import run_pipeline
-    from app.agents.section_planner import plan_and_store_sections
+    from app.agents.section_planner import plan_and_store_sections, plan_and_store_arc
 
     generating_slugs.add(slug)
+    # Total clips stored across the whole run. Initialized before the try so it
+    # is in scope in the finally even if an exception aborts the run mid-way (a
+    # run that stored 0 clips must record a failed self-heal attempt).
+    total_stored = 0
     try:
         try:
             sections = await asyncio.to_thread(plan_and_store_sections, slug, name)
@@ -31,7 +36,7 @@ async def _process_single_topic(slug: str, name: str) -> None:
             arc_titles = [s.get("title", "") for s in sections]
             for i, section in enumerate(sections):
                 try:
-                    await asyncio.to_thread(
+                    stored = await asyncio.to_thread(
                         run_pipeline,
                         slug,
                         name,
@@ -42,8 +47,136 @@ async def _process_single_topic(slug: str, name: str) -> None:
                         section.get("description"),
                         arc_titles,
                     )
+                    total_stored += stored or 0
                 except Exception as e:
                     logger.error(f"[topics] Pipeline failed for {slug} section {section['section_index']}: {e}")
+
+            # ------------------------------------------------------------------
+            # Coherence pass — best-effort; never blocks the story/quiz passes.
+            # Req 8.1: wrap everything in try/except, never raise.
+            # ------------------------------------------------------------------
+            try:
+                from app.services.arc_assembler import assemble
+                from app.services.coherence import run_repair_loop
+                from app.services.alignment import check_and_repair
+                from app.models.schemas import LearningAtom
+
+                # 1. Read stored clips back from DB for this slug.
+                from app.db.supabase import get_client as _get_db
+                _db = _get_db()
+                _clip_rows = (
+                    _db.table("clips")
+                    .select(
+                        "id,topic_slug,video_url,section_index,title,"
+                        "pedagogical_role,coherence_score"
+                    )
+                    .eq("topic_slug", slug)
+                    .execute()
+                ).data or []
+
+                if _clip_rows:
+                    # 2. Get/create the PlannedArc for this topic (cached).
+                    planned_arc = await asyncio.to_thread(plan_and_store_arc, slug, name)
+
+                    # 3. Build a lightweight atom pool from the stored clips.
+                    #    Each clip becomes a mock LearningAtom for the assembler.
+                    atom_pool: list[LearningAtom] = []
+                    for _row in _clip_rows:
+                        _role = _row.get("pedagogical_role")
+                        if _role is None:
+                            # Use section_index as a rough fallback ordinal; skip
+                            # clips that carry no role and no section index.
+                            continue
+                        _atom = LearningAtom(
+                            id=_row["id"],
+                            topic_slug=_row["topic_slug"],
+                            video_id=_row.get("video_url", ""),
+                            source_url=_row.get("video_url", ""),
+                            role=_role,
+                            concept=(_row.get("title") or _role).strip()[:200] or _role,
+                            prior_knowledge=[],
+                            start=float(_row.get("section_index") or 0) * 60.0,
+                            end=float(_row.get("section_index") or 0) * 60.0 + 60.0,
+                        )
+                        atom_pool.append(_atom)
+
+                    if atom_pool:
+                        # 4. Assemble: select atoms, topological-order, size into clips.
+                        coherence_clips, defects = await asyncio.to_thread(
+                            assemble, atom_pool, planned_arc
+                        )
+
+                        # 5. Run coherence repair loop → best CoherenceResult.
+                        best_result = await asyncio.to_thread(
+                            run_repair_loop, coherence_clips, planned_arc, atom_pool
+                        )
+
+                        # 6. Alignment check + repair.
+                        alignment_result = await asyncio.to_thread(
+                            check_and_repair, coherence_clips, planned_arc, atom_pool
+                        )
+
+                        # 7. Write pedagogical_role, role_ordinal, and coherence_score
+                        #    back to each original stored clip that appears in the
+                        #    assembled sequence (matched by clip id).
+                        #
+                        #    Build an id → assembled-clip map from the assembled sequence
+                        #    so we only update clips that made it through assembly.
+                        _assembled_by_id: dict[str, object] = {
+                            c.id: c for c in coherence_clips
+                        }
+                        # Also build ordinal from PlannedArc role lookup.
+                        _role_ordinal_map: dict[str, int] = {
+                            ar.role: ar.ordinal for ar in planned_arc.roles
+                        }
+                        _coherence_score = best_result.coherence_score
+
+                        for _assembled_clip in coherence_clips:
+                            _clip_id = _assembled_clip.id
+                            _new_role = _assembled_clip.pedagogical_role
+                            _new_ordinal = (
+                                _role_ordinal_map.get(_new_role)
+                                if _new_role else None
+                            )
+                            try:
+                                _db.table("clips").update(
+                                    {
+                                        "pedagogical_role": _new_role,
+                                        "role_ordinal": _new_ordinal,
+                                        "coherence_score": _coherence_score,
+                                    }
+                                ).eq("id", _clip_id).execute()
+                            except Exception as _upd_exc:
+                                logger.warning(
+                                    f"[topics] coherence: failed to update clip "
+                                    f"{_clip_id} for {slug}: {_upd_exc}"
+                                )
+
+                        logger.info(
+                            f"[topics] coherence pass complete for {slug}: "
+                            f"score={_coherence_score:.2f} "
+                            f"defects={len(best_result.defects)} "
+                            f"aligned={alignment_result.aligned} "
+                            f"assembled={len(coherence_clips)} clips"
+                        )
+                    else:
+                        logger.info(
+                            f"[topics] coherence pass skipped for {slug}: "
+                            f"no clips with pedagogical_role in DB"
+                        )
+                else:
+                    logger.info(
+                        f"[topics] coherence pass skipped for {slug}: no stored clips found"
+                    )
+            except Exception as _coh_exc:
+                logger.warning(
+                    f"[topics] coherence pass failed for {slug} (continuing to story pass): "
+                    f"{_coh_exc}"
+                )
+            # ------------------------------------------------------------------
+            # End coherence pass
+            # ------------------------------------------------------------------
+
             # All beats generated — score + order the full sequence as one story.
             try:
                 from app.services.story import run_story_pass
@@ -58,11 +191,23 @@ async def _process_single_topic(slug: str, name: str) -> None:
                 logger.error(f"[topics] Quiz generation failed for topic={slug}: {e}")
         else:
             try:
-                await asyncio.to_thread(run_pipeline, slug, name)
+                stored = await asyncio.to_thread(run_pipeline, slug, name)
+                total_stored += stored or 0
             except Exception as e:
                 logger.error(f"[topics] Background pipeline failed for topic={slug}: {e}")
     finally:
         generating_slugs.discard(slug)
+        # Record the attempt outcome so the retry budget survives the
+        # generating_slugs lifecycle: a successful run (>=1 clip stored) clears
+        # tracking, an empty run records a failed attempt toward the cap. Covers
+        # both the initial POST path and the self-heal path in one place.
+        try:
+            if total_stored >= 1:
+                self_heal_state.clear(slug)
+            else:
+                self_heal_state.record_attempt(slug)
+        except Exception as e:
+            logger.warning(f"[topics] Failed to record self-heal outcome for {slug}: {e}")
 
 
 async def _process_topics_parallel(topics: list[tuple[str, str]]) -> None:
