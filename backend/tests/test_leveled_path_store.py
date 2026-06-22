@@ -15,8 +15,10 @@ from tests.conftest import FakeDB
 from app.services.curriculum_spine import SpineNode
 from app.services.leveled_path_store import (
     build_leveled_path,
+    build_leveled_path_from_topics,
     persist_leveled_path,
     serialize_leveled_path,
+    store_leveled_path_for_topics,
 )
 
 
@@ -100,3 +102,42 @@ def test_persist_no_session_id_is_noop():
     db = FakeDB(store={"learning_paths": []})
     assert persist_leveled_path("", build_leveled_path(_nodes()), db) is False
     assert db.rec.get("updates", []) == []
+
+
+def test_build_from_topics_groups_planned_topics():
+    # The query's planned topics (slug + difficulty), in prerequisite order, are
+    # grouped into the LeveledPath that drives the feed's Level stepper.
+    topics = [
+        {"slug": "variables", "difficulty": "beginner"},
+        {"slug": "loops", "difficulty": "beginner"},
+        {"slug": "recursion", "difficulty": "intermediate"},
+        {"slug": "dp", "difficulty": "advanced"},
+    ]
+    leveled = build_leveled_path_from_topics(topics)
+    # 2-4 levels for a multi-topic plan, partition preserves order.
+    assert 2 <= len(leveled.levels) <= 4
+    flat = [s for lvl in leveled.levels for s in lvl.topic_slugs]
+    assert flat == ["variables", "loops", "recursion", "dp"]
+
+
+def test_build_from_topics_uniform_difficulty_still_multi_level():
+    # Even an all-same-difficulty plan splits into >= 2 levels (even-split
+    # fallback), so the stepper is never hidden for a multi-topic plan.
+    topics = [{"slug": f"t{i}", "difficulty": "beginner"} for i in range(4)]
+    leveled = build_leveled_path_from_topics(topics)
+    assert len(leveled.levels) >= 2
+    assert [s for lvl in leveled.levels for s in lvl.topic_slugs] == ["t0", "t1", "t2", "t3"]
+
+
+def test_build_from_topics_empty_is_empty():
+    assert build_leveled_path_from_topics([]).levels == ()
+
+
+def test_store_for_topics_persists_levels(monkeypatch):
+    db = FakeDB(store={"learning_paths": [{"session_id": "s1", "levels": None}]})
+    topics = [
+        {"slug": "a", "difficulty": "beginner"},
+        {"slug": "b", "difficulty": "advanced"},
+    ]
+    leveled = store_leveled_path_for_topics("s1", topics, db)
+    assert db.store["learning_paths"][0]["levels"] == serialize_leveled_path(leveled)

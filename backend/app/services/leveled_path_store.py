@@ -85,6 +85,71 @@ def build_leveled_path(spine_path: Iterable) -> LeveledPath:
     return group_levels(topics)
 
 
+def build_leveled_path_from_topics(topics: Iterable) -> LeveledPath:
+    """Group the query's PLANNED, prerequisite-ordered topics into a LeveledPath.
+
+    This is the path the feed actually plays: the topics ``curriculum_agent``
+    emitted for the query (``learning_paths.topic_slugs``), in prerequisite order.
+    Each topic is mapped to a :class:`~app.services.level_grouping.PathTopic` using
+    its ``slug`` and its ``difficulty`` as the Content_Level band, then grouped by
+    the pure :func:`~app.services.level_grouping.group_levels`. Grouping never
+    reorders, so prerequisite order is preserved; an even-split fallback still
+    yields 2-4 Levels even when every topic shares one difficulty band.
+
+    Accepts ``Topic`` objects (``.slug`` / ``.difficulty``) or plain dicts
+    (``{"slug", "difficulty"}``). Topics without a slug are skipped.
+
+    Args:
+        topics: The query's planned topics, in prerequisite order.
+
+    Returns:
+        The grouped :class:`LeveledPath` over the planned topics.
+
+    Validates: Requirements 1.1, 1.2
+    """
+    path_topics: list[PathTopic] = []
+    for index, topic in enumerate(topics):
+        if isinstance(topic, dict):
+            slug = topic.get("slug")
+            level = topic.get("difficulty") or ""
+        else:
+            slug = getattr(topic, "slug", None)
+            level = getattr(topic, "difficulty", None) or ""
+        if not slug:
+            continue
+        path_topics.append(
+            PathTopic(topic_slug=slug, content_level=str(level), position=index)
+        )
+    return group_levels(path_topics)
+
+
+def store_leveled_path_for_topics(
+    session_id: str, topics: Iterable, db=None
+) -> LeveledPath:
+    """Group the query's planned topics into Levels and persist the projection.
+
+    The path-level analogue of :func:`store_leveled_path_for_query`, but grouping
+    the query's ACTUAL planned topics (the ones the feed plays) instead of
+    resolving a separate Curriculum_Spine path -- so the Level -> Topic -> Beat
+    stepper always reflects the topics the learner is actually watching. Persists
+    the serialized :class:`LeveledPath` into ``learning_paths.levels`` best-effort;
+    never raises into the request path.
+
+    Args:
+        session_id: The learning path's session id (the row key).
+        topics: The query's planned topics, in prerequisite order.
+        db: Optional Supabase client (injected in tests).
+
+    Returns:
+        The grouped :class:`LeveledPath` (also persisted best-effort).
+
+    Validates: Requirements 1.1, 1.2, 5.3
+    """
+    leveled = build_leveled_path_from_topics(topics)
+    persist_leveled_path(session_id, leveled, db)
+    return leveled
+
+
 def serialize_leveled_path(leveled: LeveledPath) -> list[dict]:
     """Serialize a ``LeveledPath`` to a jsonb-ready list for persistence.
 
@@ -168,6 +233,63 @@ def persist_leveled_path(session_id: str, leveled: LeveledPath, db=None) -> bool
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
+
+def build_leveled_path_from_topics(topics: Iterable) -> LeveledPath:
+    """Group the query's PLANNED topics into a LeveledPath via the pure core.
+
+    The learner's feed is built from the prerequisite-ordered topics that
+    ``curriculum_agent`` plans (``learning_paths.topic_slugs``), so the visible
+    Level -> Topic -> Beat stepper must group THOSE topics -- not a separately
+    resolved Curriculum_Spine path, which is sparse on a young library and would
+    not match the feed. Each planned topic carries a ``slug`` and a
+    ``difficulty`` (one of the Content_Levels), which map directly onto a
+    :class:`~app.services.level_grouping.PathTopic`; the topics are already in
+    prerequisite order, so contiguous grouping preserves that order.
+
+    Accepts ``Topic`` objects (``.slug`` / ``.difficulty``) or equivalent dicts
+    (``"slug"`` / ``"difficulty"``). Topics without a slug are skipped. An empty
+    input yields ``LeveledPath(())``.
+
+    Validates: Requirements 1.1, 1.2
+    """
+    path_topics: list[PathTopic] = []
+    position = 0
+    for topic in topics:
+        if isinstance(topic, dict):
+            slug = topic.get("slug")
+            level = topic.get("difficulty")
+        else:
+            slug = getattr(topic, "slug", None)
+            level = getattr(topic, "difficulty", None)
+        if not slug:
+            continue
+        path_topics.append(
+            PathTopic(topic_slug=slug, content_level=str(level or ""), position=position)
+        )
+        position += 1
+    return group_levels(path_topics)
+
+
+def store_leveled_path_for_topics(
+    session_id: str, topics: Iterable, db=None
+) -> LeveledPath:
+    """Group the planned topics into Levels and persist the projection.
+
+    Maps the query's planned topics through :func:`build_leveled_path_from_topics`
+    (no LLM call -- grouping is a pure partition over the already-planned,
+    prerequisite-ordered topics) and persists the serialized ``LeveledPath`` into
+    the nullable ``learning_paths.levels`` column best-effort. Never raises into
+    the request path.
+
+    This is the seam ``api/topics.create_learning_path`` schedules so the feed's
+    Level stepper reflects the topics the learner actually watches.
+
+    Validates: Requirements 1.1, 1.2, 5.3
+    """
+    leveled = build_leveled_path_from_topics(topics)
+    persist_leveled_path(session_id, leveled, db)
+    return leveled
+
 
 def store_leveled_path_for_query(
     session_id: str, query: str, db=None

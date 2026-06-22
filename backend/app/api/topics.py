@@ -271,16 +271,21 @@ async def create_learning_path(request: Request, req: TopicRequest, background_t
         logger.error(f"[topics] Failed to insert learning_path session={path.session_id}: {e}")
         # Don't block the user — path is still usable even if DB write fails
 
-    # Group the prerequisite-ordered spine path into Levels and persist the
-    # serialized LeveledPath into the nullable learning_paths.levels column
-    # (Phase 1). Best-effort and off the request path: grouping is a pure
-    # partition over the already-generated path (no new LLM call), and a NULL
-    # levels column renders a single implicit level (legacy behavior).
+    # Group the learner's PLANNED, prerequisite-ordered topics into Levels and
+    # persist the serialized LeveledPath into the nullable learning_paths.levels
+    # column (Phase 1). Grouping the planned topics (the ones the feed actually
+    # plays) -- rather than a separately resolved, sparse Curriculum_Spine path --
+    # is what makes the Level -> Topic -> Beat stepper appear and match the feed.
+    # Best-effort and off the request path: grouping is a pure partition (no LLM
+    # call), and a NULL levels column renders a single implicit level (legacy).
     try:
-        from app.services.leveled_path_store import store_leveled_path_for_query
+        from app.services.leveled_path_store import store_leveled_path_for_topics
 
+        planned_topics = [
+            {"slug": t.slug, "difficulty": t.difficulty} for t in path.topics
+        ]
         background_tasks.add_task(
-            store_leveled_path_for_query, path.session_id, path.user_query
+            store_leveled_path_for_topics, path.session_id, planned_topics
         )
     except Exception as e:
         logger.warning(f"[topics] Failed to schedule leveled-path grouping session={path.session_id}: {e}")
