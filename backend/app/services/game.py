@@ -16,6 +16,7 @@ import json
 import logging
 import re
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Literal
@@ -563,20 +564,31 @@ def _generate_quiz_attempt(node: str, transcript: str | None) -> list[dict]:
     parsed = _parse_json(resp.choices[0].message.content)
     candidates = parsed if isinstance(parsed, list) else []
 
-    kept: list[dict] = []
-    for question in _filter_valid_questions(candidates):
+    valid = _filter_valid_questions(candidates)
+    if not valid:
+        return []
+
+    # The reused quiz judge is one LLM round-trip PER question; running them
+    # back-to-back is the dominant cost of a checkpoint. Judge them concurrently
+    # so the wall-time is ~one round-trip instead of N. A judge call that raises
+    # drops only that question (best-effort), never the batch — mirroring
+    # ``quiz._vet_questions``. ``executor.map`` preserves input order.
+    def _judged(question: dict) -> dict | None:
         try:
             verdict = quiz._judge_question(node, question)
         except Exception as exc:  # judge failure drops the question, not the batch
             logger.warning(f"[game] quiz judge failed for a '{node}' question: {exc}")
-            continue
+            return None
         if not verdict.get("ok"):
-            continue
+            return None
         # Guarantee exactly one Concept_Tag per question (Req 11.3).
         if not question.get("concept_tag"):
             question["concept_tag"] = node
-        kept.append(question)
-    return kept
+        return question
+
+    with ThreadPoolExecutor(max_workers=min(len(valid), 5)) as executor:
+        results = executor.map(_judged, valid)
+    return [q for q in results if q is not None]
 
 
 def generate_quiz(node: str, transcript: str | None) -> list[dict]:
@@ -1283,6 +1295,39 @@ def _build_clip(selected: dict) -> dict | None:
     }
 
 
+def _resolve_clip(node: str, goal: str) -> tuple[dict | None, str | None]:
+    """Resolve a node's clip and its transcript text (Req 10, 11.1, 11.2).
+
+    Runs the full clip pipeline — ``clip_query`` → ``youtube.youtube_search``
+    (Clip_Search) → :func:`select_clip` → :func:`_build_clip` →
+    ``_fetch_transcript`` — and returns ``(clip, transcript_text)``. Extracted so
+    :func:`deliver_node` can run it concurrently with the Intuition_Card hook.
+
+    ``youtube_search`` returns ``None`` when no project can afford a search
+    (Req 10.4) and an empty list on a successful-but-empty search (Req 10.6);
+    both paths return ``(None, None)`` so the node flow continues with no clip
+    and a transcript-free quiz, exposing no ``video_url``. Never raises.
+    """
+    query = _safe_clip_query(node, goal)
+    try:
+        clips = youtube.youtube_search(query)
+    except Exception as exc:
+        # Treat an unexpected search error like an unaffordable search: continue
+        # with no clip and a transcript-free quiz rather than break the loop.
+        logger.warning(f"[game] youtube_search failed for query '{query}': {exc}")
+        clips = None
+
+    if not clips:
+        return None, None
+
+    clip_out = _build_clip(select_clip(clips))
+    if clip_out is None:
+        return None, None
+
+    transcript_text = _transcript_text(clip_out["video_id"])
+    return clip_out, transcript_text
+
+
 def deliver_node(node: str, goal: str) -> NodePayload:
     """Deliver a Node: Intuition_Card + Clip + Checkpoint_Quiz (Req 7, 9, 10, 11).
 
@@ -1313,27 +1358,16 @@ def deliver_node(node: str, goal: str) -> NodePayload:
     Returns a :class:`NodePayload` carrying the node, the hook, the clip (or
     ``None``), and the 3-question checkpoint quiz.
     """
-    hook = _safe_hook(node, goal)
-    query = _safe_clip_query(node, goal)
-
-    try:
-        clips = youtube.youtube_search(query)
-    except Exception as exc:
-        # Treat an unexpected search error like an unaffordable search: continue
-        # with no clip and a transcript-free quiz rather than break the loop.
-        logger.warning(f"[game] youtube_search failed for query '{query}': {exc}")
-        clips = None
-
-    clip_out: dict | None = None
-    transcript_text: str | None = None
-
-    # youtube_search returns None when no project can afford a search (Req 10.4)
-    # and an empty list on a successful but empty search (Req 10.6); both paths
-    # continue with clip = None and a transcript-free quiz, no video_url exposed.
-    if clips:
-        clip_out = _build_clip(select_clip(clips))
-        if clip_out is not None:
-            transcript_text = _transcript_text(clip_out["video_id"])
+    # The Intuition_Card hook and the clip pipeline (clip_query → search →
+    # transcript) are independent, so run them concurrently to cut latency —
+    # otherwise the hook LLM call and the clip-query LLM call happen
+    # back-to-back. The quiz still runs afterward because it depends on the
+    # clip's transcript.
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        hook_future = executor.submit(_safe_hook, node, goal)
+        clip_future = executor.submit(_resolve_clip, node, goal)
+        hook = hook_future.result()
+        clip_out, transcript_text = clip_future.result()
 
     # Transcript-grounded when one is available, else model-knowledge (Req 11.2).
     # Checkpoints are SOFT and must never hard-block the loop (Req 23.4): if

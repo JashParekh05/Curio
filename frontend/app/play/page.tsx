@@ -27,6 +27,7 @@ import {
   decideGame,
   deliverGameNode,
   type DecideGameRequest,
+  type NodeResponse,
 } from "@/lib/api";
 import {
   persistGameSession,
@@ -270,6 +271,12 @@ export default function PlayPage() {
   const gameRef = useRef<GameSessionState | null>(null);
   gameRef.current = game;
 
+  // Prefetched next node: kicked off as soon as a decision arrives (while the
+  // learner reads the outcome card), so "Continue" can use the in-flight result
+  // instead of waiting on a fresh round-trip. Keyed by the node name so a stale
+  // prefetch (e.g. after a different decision) is ignored.
+  const prefetchRef = useRef<{ node: string; promise: Promise<NodeResponse> } | null>(null);
+
   // Restore an in-progress session on mount (Req 21.3). Runs once on the client.
   useEffect(() => {
     const activeId = getActiveGameSessionId();
@@ -357,6 +364,25 @@ export default function PlayPage() {
         };
         const decision = await decideGame(req, token);
         commit({ ...grading, last_decision: decision, phase: "decision" });
+
+        // Prefetch the next node now (during the outcome card) so Continue is
+        // instant. applyDecision is pure — we only read the node it would
+        // deliver; the actual state transition still happens on Continue.
+        const { deliver, done } = applyDecision(
+          { ...grading, last_decision: decision },
+          decision,
+        );
+        if (!done && deliver) {
+          prefetchRef.current = {
+            node: deliver,
+            // Swallow rejection here so it doesn't surface as an unhandled
+            // promise; Continue re-checks and falls back to a fresh fetch.
+            promise: deliverGameNode(deliver, grading.goal, token),
+          };
+          prefetchRef.current.promise.catch(() => {});
+        } else {
+          prefetchRef.current = null;
+        }
       } catch {
         // Leave the loop where it was so the learner can retry (Req 5.11).
         commit({ ...grading, phase: inFlightPhase === "grading" ? "probe" : "outcome" });
@@ -385,7 +411,10 @@ export default function PlayPage() {
   // Fetch a node's intuition + clip + quiz and store it as the active node.
   // Shared by the decision→delivery transition and the retry affordance, so a
   // transient delivery hiccup (e.g. a checkpoint that came back short) never
-  // hard-blocks the loop — the learner can always re-fetch the node.
+  // hard-blocks the loop — the learner can always re-fetch the node. When a
+  // prefetch for this node is in flight (kicked off when the decision arrived),
+  // it is awaited instead of starting a fresh round-trip — making Continue feel
+  // instant. A prefetch that rejects falls back to a fresh fetch.
   const fetchAndSetNode = useCallback(
     async (deliver: string, base: GameSessionState) => {
       const pending: GameSessionState = { ...base, phase: "node-delivery", active_node: null };
@@ -393,8 +422,22 @@ export default function PlayPage() {
       setBeat("intuition");
       setBusy(true);
       setError("");
+
+      // Use a matching in-flight prefetch when available; clear it either way.
+      const prefetch = prefetchRef.current;
+      prefetchRef.current = null;
+
       try {
-        const node = await deliverGameNode(deliver, pending.goal, token);
+        let node: NodeResponse;
+        if (prefetch && prefetch.node === deliver) {
+          try {
+            node = await prefetch.promise;
+          } catch {
+            node = await deliverGameNode(deliver, pending.goal, token);
+          }
+        } else {
+          node = await deliverGameNode(deliver, pending.goal, token);
+        }
         const view: NodeView = {
           ...(pending.nodes[deliver] ?? {
             node: deliver,
