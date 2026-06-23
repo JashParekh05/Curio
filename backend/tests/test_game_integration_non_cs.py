@@ -205,31 +205,32 @@ def _extract(text: str, pattern: str) -> str | None:
 # A mixed candidate set: two clips in the ideal 60-180s range (one captioned,
 # one not) plus a long high-view clip. select_clip must pick the captioned
 # in-range clip over the uncaptioned in-range clip and over the long clip
-# (Req 10.5), so the chosen video_id is deterministic.
+# (Req 10.5), so the chosen video_id is deterministic. All mention the goal
+# ("French Revolution") so they survive the on-topic relevance filter.
 _SCRIPTED_CLIPS = [
     {
         "video_id": "vid_inrange_nocap",
-        "title": "Short, no captions",
+        "title": "The French Revolution, short (no captions)",
         "channel_title": "History Quick",
         "duration_seconds": 120,
         "has_caption": False,
         "view_count": 5000,
         "thumbnail_url": "https://img/1",
-        "description": "A short explainer.",
+        "description": "A short explainer on the French Revolution.",
     },
     {
         "video_id": "vid_inrange_cap",
-        "title": "Short, captioned",
+        "title": "The French Revolution, short (captioned)",
         "channel_title": "History Quick",
         "duration_seconds": 150,
         "has_caption": True,
         "view_count": 800,
         "thumbnail_url": "https://img/2",
-        "description": "A short captioned explainer.",
+        "description": "A short captioned explainer on the French Revolution.",
     },
     {
         "video_id": "vid_long_popular",
-        "title": "Long lecture",
+        "title": "The French Revolution, long lecture",
         "channel_title": "Deep Dive",
         "duration_seconds": 480,
         "has_caption": True,
