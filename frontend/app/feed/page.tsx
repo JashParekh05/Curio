@@ -3,7 +3,7 @@
 import { Suspense, Fragment, useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
-import { getPathFeed, getTopicFeed, recordClipEvent, getRecommendations, getClipMetadata, getProgress, getRemediation, type Clip, type FeedResponse, type TopicRecommendation, type Checkpoint, type FeedLevel, type LearnerProgress, type RewatchClip } from "@/lib/api";
+import { getPathFeed, getTopicFeed, recordClipEvent, getRecommendations, getClipMetadata, getRemediation, type Clip, type FeedResponse, type TopicRecommendation, type Checkpoint, type FeedLevel, type RewatchClip } from "@/lib/api";
 import { flushClipEvent, type LastLogged } from "@/lib/clip-telemetry";
 import { computeWarmWindow, AHEAD, BEHIND } from "@/lib/warm-window";
 import { createOverlayCache, getOverlay, setOverlay, hasOverlay, deriveOverlay, type OverlayCache, type OverlayMetadata } from "@/lib/overlay-cache";
@@ -44,10 +44,6 @@ function FeedContent() {
   // (legacy single-list) and the stepper button stays hidden.
   const [levels, setLevels] = useState<FeedLevel[]>([]);
   const [showLevels, setShowLevels] = useState(false);
-  // Real mastery-driven progress (per-level % + per-topic mastery/unlock badges)
-  // from GET /api/progress. null until loaded or when unavailable; in that case
-  // the stepper/panel fall back to the lightweight feed-position signal.
-  const [progress, setProgress] = useState<LearnerProgress | null>(null);
   // Soft "rewatch these clips" suggestions for the just-finished topic, shown on
   // the end-card after a weak checkpoint. Empty unless the learner did poorly.
   const [rewatchClips, setRewatchClips] = useState<RewatchClip[]>([]);
@@ -397,15 +393,9 @@ function FeedContent() {
     getRecommendations(sessionId, session?.access_token ?? "").then(setRecommendations).catch(() => {});
   }, [activeIndex, clips.length, sessionId]);
 
-  // Load real mastery-driven progress (per-level % + per-topic badges) for the
-  // stepper and the plan panel. Owner-only on the server, so it is keyed by the
-  // learner's own user id (guests have an anonymous user id too). Best-effort:
-  // a null result leaves the lightweight feed-position progress in place (no
-  // regression). Re-fetched as the learner advances so badges stay fresh.
-  useEffect(() => {
-    if (!sessionId || !user || !session?.access_token) return;
-    getProgress(user.id, session.access_token).then(setProgress).catch(() => {});
-  }, [sessionId, user, session, activeIndex, clips.length]);
+  // Real mastery-driven progress (GET /api/progress) is no longer fetched: that
+  // route was removed during decommissioning. The stepper and plan panel rely
+  // entirely on the lightweight feed-position signal (coveredSlugs) instead.
 
   // When the learner reaches the end card, surface a soft "rewatch these clips"
   // suggestion for the just-finished topic if they did poorly — either a weak
@@ -422,9 +412,7 @@ function FeedContent() {
     }
     const weak = weakCheckpointRef.current[finishedSlug];
     const isWeakCheckpoint = !!weak && weak.total > 0 && weak.correct * 2 < weak.total;
-    const topicProgress = progress?.topics[finishedSlug];
-    const belowThreshold = !!topicProgress && !topicProgress.mastered && topicProgress.status !== "not_started";
-    if (!isWeakCheckpoint && !belowThreshold) {
+    if (!isWeakCheckpoint) {
       setRewatchClips([]);
       return;
     }
@@ -436,7 +424,7 @@ function FeedContent() {
       .catch(() => { if (!cancelled) setRewatchClips([]); });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeIndex, clips.length, processing, sessionId, session, progress]);
+  }, [activeIndex, clips.length, processing, sessionId, session]);
 
   // Bounded warm window of indices to mount as players around the active index.
   const warmSet = useMemo(
@@ -531,24 +519,12 @@ function FeedContent() {
     return covered;
   }, [clips, topicLabels, activeIndex]);
 
-  // Real per-topic mastery + per-level percent from GET /api/progress, shaped for
-  // the stepper and plan panel. Undefined when progress is unavailable, in which
-  // case those surfaces fall back to the lightweight feed-position signal.
-  const topicMastery = useMemo(() => {
-    if (!progress) return undefined;
-    const m: Record<string, { mastered: boolean; unlock: string }> = {};
-    for (const [slug, t] of Object.entries(progress.topics)) {
-      m[slug] = { mastered: t.mastered, unlock: t.unlock };
-    }
-    return m;
-  }, [progress]);
-
-  const levelPercent = useMemo(() => {
-    if (!progress) return undefined;
-    const m: Record<number, number> = {};
-    for (const lvl of progress.levels) m[lvl.ordinal] = lvl.percent_complete;
-    return m;
-  }, [progress]);
+  // Real per-topic mastery + per-level percent came from GET /api/progress, which
+  // was removed during decommissioning. The stepper and plan panel now rely
+  // entirely on the lightweight feed-position signal (coveredSlugs), so these
+  // stay undefined and those surfaces fall back to it.
+  const topicMastery = undefined;
+  const levelPercent = undefined;
 
   // Jump to a topic (or a specific section) from the plan overlay. Prefer an
   // in-place scroll to the already-loaded clip; fall back to a route navigation
@@ -756,7 +732,6 @@ function FeedContent() {
           activeSlug={activeTopicSlug}
           sessionId={sessionId}
           onJump={jumpToPlan}
-          progressTopics={progress?.topics}
         />
       )}
 
