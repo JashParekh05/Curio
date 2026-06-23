@@ -185,6 +185,16 @@ def _structured_curriculum_phase3_additive_reverse() -> str:
     return "drop table if exists learning_progress;\n"
 
 
+def _self_heal_durable_additive_reverse() -> str:
+    """Recorded reverse step for the self-heal durable-cap ADDITIVE step.
+
+    Drops exactly the object ``migration_self_heal_durable.sql`` adds -- the
+    ``self_heal_attempts`` table -- restoring the pre-step schema. Idempotent
+    (drop table if exists), additive-step scope only.
+    """
+    return "drop table if exists self_heal_attempts;\n"
+
+
 @dataclass(frozen=True)
 class StagedStep:
     """A single registered step: its forward SQL file and recorded reverse SQL."""
@@ -246,6 +256,18 @@ MIGRATIONS: dict[str, dict[str, StagedStep]] = {
             step="additive",
             sql_file="migration_structured_curriculum_phase3.sql",
             reverse_sql=_structured_curriculum_phase3_additive_reverse(),
+        ),
+    },
+    # The self-heal durable-cap migration applied as the additive step of its OWN
+    # Staged_Migration. Persists the per-topic self-heal attempt count so the
+    # retry budget survives restarts/deploys and is shared across workers,
+    # closing the runaway transcript/quota spend door. The recorded reverse step
+    # drops exactly the added self_heal_attempts table.
+    "self_heal_durable": {
+        "additive": StagedStep(
+            step="additive",
+            sql_file="migration_self_heal_durable.sql",
+            reverse_sql=_self_heal_durable_additive_reverse(),
         ),
     },
 }

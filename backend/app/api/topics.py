@@ -5,7 +5,7 @@ from app.models.schemas import TopicRequest, LearningPath
 from app.db.supabase import get_client
 from app.auth import require_user
 from app.rate_limit import limiter
-from app.services import self_heal_state
+from app.services import self_heal_store
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/topics", tags=["topics"])
@@ -203,9 +203,9 @@ async def _process_single_topic(slug: str, name: str) -> None:
         # both the initial POST path and the self-heal path in one place.
         try:
             if total_stored >= 1:
-                self_heal_state.clear(slug)
+                self_heal_store.clear(slug)
             else:
-                self_heal_state.record_attempt(slug)
+                self_heal_store.record_attempt(slug)
         except Exception as e:
             logger.warning(f"[topics] Failed to record self-heal outcome for {slug}: {e}")
 

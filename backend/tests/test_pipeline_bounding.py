@@ -24,24 +24,26 @@ def test_first_section_keeps_one_video(monkeypatch):
     assert [v["video_id"] for v in out["videos"]] == ["1"]
 
 
-def test_other_sections_keep_two_videos(monkeypatch):
+def test_other_sections_keep_one_video(monkeypatch):
+    # Cost control: one paid transcript per beat (was 2 for sections 1-3).
     _stub_transcripts(monkeypatch)
     for sec in (1, 2, 3):
         out = pipeline_agent._node_transcribe(_state(sec))
-        assert len(out["videos"]) == 2
+        assert len(out["videos"]) == 1
 
 
-def test_none_section_keeps_two(monkeypatch):
+def test_none_section_keeps_one(monkeypatch):
     _stub_transcripts(monkeypatch)
     out = pipeline_agent._node_transcribe(_state(None))
-    assert len(out["videos"]) == 2
+    assert len(out["videos"]) == 1
 
 
 def test_skips_videos_without_transcript(monkeypatch):
-    # videos 1 and 2 lack transcripts → should keep 3 and 4 for a non-first section
+    # videos 1 and 2 lack transcripts -> scans past them (free) and keeps the
+    # first that has one. Failed fetches cost nothing on TranscriptAPI.
     _stub_transcripts(monkeypatch, missing={"1", "2"})
     out = pipeline_agent._node_transcribe(_state(1))
-    assert [v["video_id"] for v in out["videos"]] == ["3", "4"]
+    assert [v["video_id"] for v in out["videos"]] == ["3"]
     assert len(out["errors"]) == 2
 
 

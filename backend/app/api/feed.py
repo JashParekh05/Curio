@@ -40,7 +40,7 @@ from app.services.level_filter import (
     exclude_below,
     fallback_order,
 )
-from app.services import self_heal_state
+from app.services import self_heal_state, self_heal_store
 from app.services.telemetry import build_impressions
 from app.services.impression_store import record_impressions
 from app.services.topic_expansion import (
@@ -357,7 +357,7 @@ async def get_path_feed(session_id: str, background_tasks: BackgroundTasks, call
         # have a few clips while more are still on the way; reporting it done too
         # early makes the frontend stop polling and the user gets stuck.
         is_generating = slug in generating_slugs
-        attempts, last_age = self_heal_state.read(slug)
+        attempts, last_age = self_heal_store.read(slug)
         has_clips = bool(clips)
         if self_heal_state.should_self_heal(has_clips, is_generating, attempts, last_age):
             missing_slugs.append(slug)
