@@ -14,8 +14,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Literal
@@ -162,6 +164,63 @@ def _view_count(clip: dict) -> int:
 def _has_caption(clip: dict) -> bool:
     """Best-effort ``has_caption`` flag for a clip dict (defaults to False)."""
     return bool((clip or {}).get("has_caption"))
+
+
+# Lead-in / filler words that carry no topical signal, stripped before scoring a
+# clip's relevance to a node so the match keys on the real subject terms.
+_CLIP_STOPWORDS = frozenset(
+    {
+        "the", "a", "an", "of", "to", "and", "or", "in", "on", "for", "with",
+        "how", "what", "why", "is", "are", "do", "does", "your", "you", "about",
+        "learn", "learning", "teach", "teaching", "me", "into", "intro",
+        "introduction", "basics", "basic", "understand", "understanding",
+        "explained", "explainer", "guide", "tutorial", "overview", "concept",
+        "concepts", "this", "that", "from", "as", "it", "its",
+    }
+)
+
+
+def _topic_tokens(text: str) -> set[str]:
+    """Lowercased subject tokens of ``text`` (>=3 chars, stopwords removed).
+
+    Used to score how on-topic a clip is for a node/goal; filler like "learn",
+    "intro", "explained" is dropped so only the real subject words remain.
+    """
+    words = re.findall(r"[a-z0-9]+", (text or "").lower())
+    return {w for w in words if len(w) >= 3 and w not in _CLIP_STOPWORDS}
+
+
+def relevant_clips(clips: list[dict], node: str, goal: str) -> list[dict]:
+    """Keep only clips whose title/description are on-topic for the node (Req 10).
+
+    ``select_clip`` ranks purely by duration / captions / views, so an off-topic
+    but popular clip could win — e.g. an "imperialism" node landing on an
+    unrelated history video. This pre-filter drops candidates whose title +
+    description share no subject term with the node (the goal's terms count as a
+    weaker secondary signal), keeping the result ON-TOPIC before duration
+    ranking. Order is preserved so ``select_clip`` stays deterministic.
+
+    Safe by construction: if the filter would remove every clip (e.g. sparse
+    metadata), it returns the original list unchanged so a clip is never lost —
+    a possibly-loose clip still beats no clip (the checkpoint stays soft).
+    """
+    node_tokens = _topic_tokens(node)
+    goal_tokens = _topic_tokens(goal)
+    if not node_tokens and not goal_tokens:
+        return clips
+
+    kept: list[dict] = []
+    for clip in clips or []:
+        c = clip or {}
+        hay = _topic_tokens(f"{c.get('title', '')} {c.get('description', '')}")
+        node_hits = len(node_tokens & hay)
+        goal_hits = len(goal_tokens & hay)
+        # On-topic when the clip shares a node term, or (when the node yields no
+        # usable terms) a goal term.
+        if node_hits > 0 or (not node_tokens and goal_hits > 0):
+            kept.append(clip)
+    # Never strand the node with no clip when nothing matched.
+    return kept or clips
 
 
 def select_clip(clips: list[dict]) -> dict | None:
@@ -481,6 +540,12 @@ CHECKPOINT_QUESTION_COUNT = 3
 # One initial generation plus up to this many backfill re-invocations to reach
 # three valid questions (Req 11.7).
 MAX_QUIZ_BACKFILL_ATTEMPTS = 3
+# The per-question LLM quality judge is an extra gate on top of structural
+# validation. Enabled by default; set GAME_QUIZ_JUDGE=0 to skip it and shave a
+# round-trip off node delivery (structural _validate_question still applies).
+_QUIZ_JUDGE_ENABLED = os.environ.get("GAME_QUIZ_JUDGE", "1").strip().lower() not in (
+    "0", "false", "no", "off",
+)
 
 # The verbatim ``generate_quiz`` prompt — the source of truth from the
 # requirements' "LLM Functions (Source of Truth)": a 3-question checkpoint quiz
@@ -563,20 +628,40 @@ def _generate_quiz_attempt(node: str, transcript: str | None) -> list[dict]:
     parsed = _parse_json(resp.choices[0].message.content)
     candidates = parsed if isinstance(parsed, list) else []
 
-    kept: list[dict] = []
-    for question in _filter_valid_questions(candidates):
+    valid = _filter_valid_questions(candidates)
+    if not valid:
+        return []
+
+    # The reused quiz judge is one LLM round-trip PER question — an extra quality
+    # gate on top of the structural _validate_question filter. It can be disabled
+    # for speed via GAME_QUIZ_JUDGE=0 (the questions still pass full structural
+    # validation; only the LLM quality vetting is skipped), removing those
+    # round-trips entirely from node delivery.
+    if not _QUIZ_JUDGE_ENABLED:
+        for question in valid:
+            if not question.get("concept_tag"):
+                question["concept_tag"] = node
+        return valid
+
+    # Judge the candidates concurrently rather than back-to-back so the wall-time
+    # is ~one round-trip instead of N. A judge call that raises drops only that
+    # question (best-effort), never the batch. ``executor.map`` preserves order.
+    def _judged(question: dict) -> dict | None:
         try:
             verdict = quiz._judge_question(node, question)
         except Exception as exc:  # judge failure drops the question, not the batch
             logger.warning(f"[game] quiz judge failed for a '{node}' question: {exc}")
-            continue
+            return None
         if not verdict.get("ok"):
-            continue
+            return None
         # Guarantee exactly one Concept_Tag per question (Req 11.3).
         if not question.get("concept_tag"):
             question["concept_tag"] = node
-        kept.append(question)
-    return kept
+        return question
+
+    with ThreadPoolExecutor(max_workers=min(len(valid), 5)) as executor:
+        results = executor.map(_judged, valid)
+    return [q for q in results if q is not None]
 
 
 def generate_quiz(node: str, transcript: str | None) -> list[dict]:
@@ -692,6 +777,7 @@ You want a SHORT, punchy explainer — roughly a 3 to 10 minute focused video th
 
 Your query MUST:
 - target a SHORT focused explainer of "{node}" (the kind of 3-10 minute video that explains one idea well)
+- stay tightly ON-TOPIC for "{node}" as it relates to "{goal}" — include the most specific, disambiguating terms so results are about THIS concept, not a same-named topic in another field or a loosely related tangent
 - NOT name any specific channel, creator, or person
 - NOT contain the phrase "full course" or ask for a course, playlist, or full lecture series
 - be a concise search string, not a sentence
@@ -1283,6 +1369,41 @@ def _build_clip(selected: dict) -> dict | None:
     }
 
 
+def _resolve_clip(node: str, goal: str) -> tuple[dict | None, str | None]:
+    """Resolve a node's clip and its transcript text (Req 10, 11.1, 11.2).
+
+    Runs the full clip pipeline — ``clip_query`` → ``youtube.youtube_search``
+    (Clip_Search) → :func:`select_clip` → :func:`_build_clip` →
+    ``_fetch_transcript`` — and returns ``(clip, transcript_text)``. Extracted so
+    :func:`deliver_node` can run it concurrently with the Intuition_Card hook.
+
+    ``youtube_search`` returns ``None`` when no project can afford a search
+    (Req 10.4) and an empty list on a successful-but-empty search (Req 10.6);
+    both paths return ``(None, None)`` so the node flow continues with no clip
+    and a transcript-free quiz, exposing no ``video_url``. Never raises.
+    """
+    query = _safe_clip_query(node, goal)
+    try:
+        clips = youtube.youtube_search(query)
+    except Exception as exc:
+        # Treat an unexpected search error like an unaffordable search: continue
+        # with no clip and a transcript-free quiz rather than break the loop.
+        logger.warning(f"[game] youtube_search failed for query '{query}': {exc}")
+        clips = None
+
+    if not clips:
+        return None, None
+
+    # Drop off-topic candidates before duration ranking so the chosen clip is
+    # actually about this node (Req 10), not just well-sized/popular.
+    clip_out = _build_clip(select_clip(relevant_clips(clips, node, goal)))
+    if clip_out is None:
+        return None, None
+
+    transcript_text = _transcript_text(clip_out["video_id"])
+    return clip_out, transcript_text
+
+
 def deliver_node(node: str, goal: str) -> NodePayload:
     """Deliver a Node: Intuition_Card + Clip + Checkpoint_Quiz (Req 7, 9, 10, 11).
 
@@ -1313,27 +1434,16 @@ def deliver_node(node: str, goal: str) -> NodePayload:
     Returns a :class:`NodePayload` carrying the node, the hook, the clip (or
     ``None``), and the 3-question checkpoint quiz.
     """
-    hook = _safe_hook(node, goal)
-    query = _safe_clip_query(node, goal)
-
-    try:
-        clips = youtube.youtube_search(query)
-    except Exception as exc:
-        # Treat an unexpected search error like an unaffordable search: continue
-        # with no clip and a transcript-free quiz rather than break the loop.
-        logger.warning(f"[game] youtube_search failed for query '{query}': {exc}")
-        clips = None
-
-    clip_out: dict | None = None
-    transcript_text: str | None = None
-
-    # youtube_search returns None when no project can afford a search (Req 10.4)
-    # and an empty list on a successful but empty search (Req 10.6); both paths
-    # continue with clip = None and a transcript-free quiz, no video_url exposed.
-    if clips:
-        clip_out = _build_clip(select_clip(clips))
-        if clip_out is not None:
-            transcript_text = _transcript_text(clip_out["video_id"])
+    # The Intuition_Card hook and the clip pipeline (clip_query → search →
+    # transcript) are independent, so run them concurrently to cut latency —
+    # otherwise the hook LLM call and the clip-query LLM call happen
+    # back-to-back. The quiz still runs afterward because it depends on the
+    # clip's transcript.
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        hook_future = executor.submit(_safe_hook, node, goal)
+        clip_future = executor.submit(_resolve_clip, node, goal)
+        hook = hook_future.result()
+        clip_out, transcript_text = clip_future.result()
 
     # Transcript-grounded when one is available, else model-knowledge (Req 11.2).
     # Checkpoints are SOFT and must never hard-block the loop (Req 23.4): if
