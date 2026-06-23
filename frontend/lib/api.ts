@@ -385,54 +385,18 @@ export async function submitPlacement(
 // degrades to a null/empty result so the feed never blocks and the lightweight
 // feed-position progress keeps working (no regression).
 
-// One topic's advisory status from GET /api/progress. `unlock` is purely
-// advisory — "available" | "recommended" | "mastered" — and NEVER blocking.
+// One topic's advisory status. `unlock` is purely advisory — "available" |
+// "recommended" | "mastered" — and NEVER blocking. Retained as the optional
+// `progressTopics` prop type for PlanPanel's mastery-badge fallback; the
+// GET /api/progress route that once populated it was removed during
+// decommissioning, so the feed now relies on the lightweight feed-position
+// signal and PlanPanel falls back to the quiz-mastery signal.
 export interface ProgressTopic {
   mastery_score: number;          // [0,1]
   status: string;                 // not_started | in_progress | mastered
   mastered: boolean;
   unlock: "available" | "recommended" | "mastered";
   level: string | null;
-}
-
-// A topic entry as it appears inside a level (carries its own slug).
-export interface ProgressLevelTopic extends ProgressTopic {
-  topic_slug: string;
-}
-
-// One level's advisory progress. `percent_complete` is bounded [0,100] and
-// equals 100 iff every topic in a non-empty level is mastered.
-export interface ProgressLevel {
-  ordinal: number;
-  name: string;
-  percent_complete: number;       // [0,100]
-  all_mastered: boolean;
-  topics: ProgressLevelTopic[];
-}
-
-// The learner's full progress projection. `topics` is a flat slug -> status map;
-// `levels` carries the per-level bar + per-topic badges for the stepper.
-export interface LearnerProgress {
-  subject: string;
-  levels: ProgressLevel[];
-  topics: Record<string, ProgressTopic>;
-  total_points: number;
-}
-
-// Fetch the learner's per-level progress + per-topic mastery/unlock badges.
-// Owner-only on the server (subject must be the caller's own user id). Returns
-// null on any failure (incl. the additive Phase 3 table not yet existing), so
-// callers fall back to the lightweight feed-position progress with no regression.
-export async function getProgress(subject: string, token: string): Promise<LearnerProgress | null> {
-  try {
-    const res = await fetch(`${API_BASE}/api/progress/${encodeURIComponent(subject)}`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) return null;
-    return res.json();
-  } catch {
-    return null;
-  }
 }
 
 // One already-seen clip the learner is gently nudged to rewatch after a weak
