@@ -382,6 +382,43 @@ export default function PlayPage() {
 
   // -- decision → node delivery (Req 7, 9–11) -------------------------------
 
+  // Fetch a node's intuition + clip + quiz and store it as the active node.
+  // Shared by the decision→delivery transition and the retry affordance, so a
+  // transient delivery hiccup (e.g. a checkpoint that came back short) never
+  // hard-blocks the loop — the learner can always re-fetch the node.
+  const fetchAndSetNode = useCallback(
+    async (deliver: string, base: GameSessionState) => {
+      const pending: GameSessionState = { ...base, phase: "node-delivery", active_node: null };
+      commit(pending);
+      setBeat("intuition");
+      setBusy(true);
+      setError("");
+      try {
+        const node = await deliverGameNode(deliver, pending.goal, token);
+        const view: NodeView = {
+          ...(pending.nodes[deliver] ?? {
+            node: deliver,
+            state: "NEXT",
+            is_goal: deliver === pending.goal,
+          }),
+          hook: node.hook,
+          clip: node.clip ?? undefined,
+          quiz: node.quiz,
+        };
+        commit({
+          ...pending,
+          active_node: view,
+          nodes: { ...pending.nodes, [deliver]: view },
+        });
+      } catch {
+        setError("We couldn't load that node. Try again.");
+      } finally {
+        setBusy(false);
+      }
+    },
+    [commit, token],
+  );
+
   async function handleContinueFromOutcome() {
     const s = gameRef.current;
     if (!s || !s.last_decision) return;
@@ -394,33 +431,15 @@ export default function PlayPage() {
     }
 
     // Move to node delivery and fetch the node's intuition + clip + quiz.
-    const pending: GameSessionState = { ...state, phase: "node-delivery", active_node: null };
-    commit(pending);
-    setBeat("intuition");
-    setBusy(true);
-    setError("");
-    try {
-      const node = await deliverGameNode(deliver, s.goal, token);
-      const view: NodeView = {
-        ...(pending.nodes[deliver] ?? {
-          node: deliver,
-          state: "NEXT",
-          is_goal: deliver === s.goal,
-        }),
-        hook: node.hook,
-        clip: node.clip ?? undefined,
-        quiz: node.quiz,
-      };
-      commit({
-        ...pending,
-        active_node: view,
-        nodes: { ...pending.nodes, [deliver]: view },
-      });
-    } catch {
-      setError("We couldn't load that node. Try again.");
-    } finally {
-      setBusy(false);
-    }
+    await fetchAndSetNode(deliver, state);
+  }
+
+  // Re-fetch the current node after a delivery failure or an empty checkpoint,
+  // so a transient generation hiccup never strands the learner mid-loop.
+  function retryNodeDelivery() {
+    const s = gameRef.current;
+    if (!s) return;
+    fetchAndSetNode(s.current_node, s);
   }
 
   // Advance the node-delivery sub-beats: intuition → clip (if any) → quiz.
@@ -595,22 +614,51 @@ export default function PlayPage() {
                 </button>
               </>
             )}
-            {beat === "quiz" && game.active_node.quiz && (
-              <QuizRunner
-                questions={game.active_node.quiz}
-                heading={`Checkpoint · ${game.active_node.node}`}
-                submitLabel={busy ? "Reading the runes…" : "Submit checkpoint"}
-                onComplete={handleNodeQuizComplete}
-              />
-            )}
+            {beat === "quiz" &&
+              (game.active_node.quiz && game.active_node.quiz.length > 0 ? (
+                <QuizRunner
+                  questions={game.active_node.quiz}
+                  heading={`Checkpoint · ${game.active_node.node}`}
+                  submitLabel={busy ? "Reading the runes…" : "Submit checkpoint"}
+                  onComplete={handleNodeQuizComplete}
+                />
+              ) : (
+                // Soft checkpoint: the node came back without a usable quiz.
+                // Never hard-block — let the learner re-fetch the node.
+                <div className="brutal-card bg-white text-ink px-4 py-4 space-y-3">
+                  <p className="text-sm font-bold">
+                    We couldn&apos;t build a checkpoint for this node just now.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={retryNodeDelivery}
+                    disabled={busy}
+                    className="brutal-btn bg-ink text-paper w-full disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    {busy ? "Retrying…" : "Try again"}
+                  </button>
+                </div>
+              ))}
           </>
         )}
 
-        {/* Node delivery loading (active_node not yet fetched). */}
+        {/* Node delivery loading (active_node not yet fetched). On a delivery
+            failure, surface a retry so the loop is never stranded. */}
         {game.phase === "node-delivery" && !game.active_node && (
-          <p className="brutal-card bg-white text-ink px-4 py-4 text-sm font-bold">
-            Loading the next node…
-          </p>
+          <div className="brutal-card bg-white text-ink px-4 py-4 space-y-3">
+            <p className="text-sm font-bold">
+              {error ? error : "Loading the next node…"}
+            </p>
+            {error && !busy && (
+              <button
+                type="button"
+                onClick={retryNodeDelivery}
+                className="brutal-btn bg-ink text-paper w-full"
+              >
+                Try again
+              </button>
+            )}
+          </div>
         )}
       </div>
     </main>

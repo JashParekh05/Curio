@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -254,16 +255,83 @@ def _filter_valid_questions(candidates: list[dict]) -> list[dict]:
 PROBE_QUESTION_COUNT = 6
 
 
+def _extract_json_substring(text: str):
+    """Best-effort recovery: parse the first balanced JSON array/object in ``text``.
+
+    Models occasionally wrap strict JSON in prose ("Here is the quiz: [...]"),
+    append a trailing note, or emit a trailing comma before a closing bracket.
+    When a direct ``json.loads`` fails, this scans for the outermost ``[...]`` or
+    ``{...}`` span (respecting strings/escapes so brackets inside string values
+    don't confuse the matcher), strips trailing commas, and parses that. Raises
+    ``ValueError`` when no balanced JSON value can be recovered.
+    """
+    if not text:
+        raise ValueError("no JSON value found in empty response")
+
+    # Choose the earliest opening bracket so leading prose is skipped.
+    candidates = [i for i in (text.find("["), text.find("{")) if i != -1]
+    if not candidates:
+        raise ValueError("no JSON array or object found in response")
+    start = min(candidates)
+    open_ch = text[start]
+    close_ch = "]" if open_ch == "[" else "}"
+
+    depth = 0
+    in_string = False
+    escaped = False
+    end = -1
+    for i in range(start, len(text)):
+        ch = text[i]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == open_ch:
+            depth += 1
+        elif ch == close_ch:
+            depth -= 1
+            if depth == 0:
+                end = i
+                break
+    if end == -1:
+        raise ValueError("unbalanced JSON value in response")
+
+    snippet = text[start : end + 1]
+    # Strip trailing commas before a closing bracket/brace (a common LLM slip).
+    snippet = re.sub(r",(\s*[}\]])", r"\1", snippet)
+    return json.loads(snippet)
+
+
 def _parse_json(raw: str):
     """Fence_Stripping_Parse: strip markdown code fences, then parse strict JSON.
 
     Reuses the shared fence-stripping pattern :func:`quiz._strip_json` (the
     Fence_Stripping_Parse used by every Game_Service LLM function, Req 2.4) and
-    then ``json.loads``. Raises on unparseable input so callers can decide how
-    to recover (error response for probes/quizzes, retry-then-fallback for the
-    decide/intuition/clip functions).
+    then ``json.loads``. When the model wraps the JSON in prose, appends a note,
+    or leaves a trailing comma, a strict parse fails; in that case this falls
+    back to :func:`_extract_json_substring` to recover the first balanced JSON
+    value. Raises (``ValueError``/``JSONDecodeError``) only when nothing
+    parseable can be recovered, so callers can decide how to handle it (error
+    response for probes/quizzes, retry-then-fallback for decide/intuition/clip).
     """
-    return json.loads(quiz._strip_json(raw))
+    stripped = quiz._strip_json(raw)
+    try:
+        return json.loads(stripped)
+    except (ValueError, TypeError):
+        # Fall back to extracting a balanced JSON value from the raw text (the
+        # un-stripped form too, in case the fence split discarded content).
+        for candidate in (stripped, raw or ""):
+            try:
+                return _extract_json_substring(candidate)
+            except (ValueError, TypeError):
+                continue
+        raise
 
 
 # The verbatim ``generate_probe`` prompt — the source of truth from the
@@ -489,7 +557,7 @@ def _generate_quiz_attempt(node: str, transcript: str | None) -> list[dict]:
     resp = llm.get_client().chat.completions.create(
         model=MODEL,
         temperature=0.4,
-        max_tokens=1200,
+        max_tokens=2048,
         messages=[{"role": "user", "content": prompt}],
     )
     parsed = _parse_json(resp.choices[0].message.content)
@@ -545,6 +613,30 @@ def generate_quiz(node: str, transcript: str | None) -> list[dict]:
         f"generate_quiz could not produce {CHECKPOINT_QUESTION_COUNT} valid "
         f"questions for '{node}' after {1 + MAX_QUIZ_BACKFILL_ATTEMPTS} attempts"
     )
+
+
+def _best_effort_quiz(node: str, transcript: str | None) -> list[dict]:
+    """Salvage up to 3 valid checkpoint questions without ever raising (Req 23.4).
+
+    The strict :func:`generate_quiz` raises when it cannot assemble a full
+    3-question quiz (Req 11.8). For on-the-fly node delivery, though, the
+    checkpoint is SOFT and must never hard-block the loop, so :func:`deliver_node`
+    falls back here: this runs the same generate→validate→judge pass(es) and
+    returns whatever valid questions were produced (0-3), swallowing any
+    parse/API failure. An empty result is acceptable — the Play_Surface treats a
+    missing/short quiz as skippable rather than a dead end.
+    """
+    kept: list[dict] = []
+    for _ in range(1 + MAX_QUIZ_BACKFILL_ATTEMPTS):
+        try:
+            kept.extend(_generate_quiz_attempt(node, transcript))
+        except Exception as exc:
+            logger.warning(
+                f"[game] best-effort quiz attempt failed for '{node}': {exc}"
+            )
+        if len(kept) >= CHECKPOINT_QUESTION_COUNT:
+            break
+    return kept[:CHECKPOINT_QUESTION_COUNT]
 
 
 # The verbatim ``intuition`` prompt — the source of truth from the requirements'
@@ -1244,7 +1336,19 @@ def deliver_node(node: str, goal: str) -> NodePayload:
             transcript_text = _transcript_text(clip_out["video_id"])
 
     # Transcript-grounded when one is available, else model-knowledge (Req 11.2).
-    quiz_questions = generate_quiz(node, transcript_text)
+    # Checkpoints are SOFT and must never hard-block the loop (Req 23.4): if
+    # generate_quiz cannot assemble a full 3-question quiz (e.g. repeated LLM
+    # parse failures), salvage whatever valid questions a best-effort pass
+    # produced rather than letting the node delivery 500. The frontend renders
+    # however many questions arrive (and treats an empty quiz as skippable).
+    try:
+        quiz_questions = generate_quiz(node, transcript_text)
+    except Exception as exc:
+        logger.warning(
+            f"[game] generate_quiz could not produce a full quiz for '{node}'; "
+            f"delivering a best-effort (possibly short) checkpoint: {exc}"
+        )
+        quiz_questions = _best_effort_quiz(node, transcript_text)
 
     return NodePayload(node=node, hook=hook, clip=clip_out, quiz=quiz_questions)
 

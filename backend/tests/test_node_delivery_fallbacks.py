@@ -229,6 +229,49 @@ class TestNeverCallsGenerateAndStoreQuestions:
 
 
 # ---------------------------------------------------------------------------
+# (d) Soft checkpoint: a generate_quiz shortfall must NOT hard-block delivery
+#     (Req 23.4). deliver_node degrades to a best-effort (possibly short or
+#     empty) quiz instead of letting the ValueError 500 the endpoint.
+# ---------------------------------------------------------------------------
+
+class TestGenerateQuizShortfallDegradesGracefully:
+    def test_generate_quiz_failure_delivers_best_effort_partial(self):
+        # generate_quiz raises (could not assemble 3 valid questions), but a
+        # best-effort pass salvages 2. deliver_node must still return a payload
+        # with those 2 questions rather than raising (Req 23.4).
+        partial = _quiz_questions()[:2]
+        with (
+            patch.object(game, "intuition", return_value={"hook": "Hook."}),
+            patch.object(game, "clip_query", return_value={"query": "q"}),
+            patch.object(game.youtube, "youtube_search", return_value=None),
+            patch.object(game.youtube, "_fetch_transcript", return_value=None),
+            patch.object(game, "generate_quiz", side_effect=ValueError("could not produce 3")),
+            patch.object(game, "_best_effort_quiz", return_value=partial),
+        ):
+            payload = game.deliver_node("recursion", "backtracking")
+
+        assert payload.node == "recursion"
+        assert payload.hook == "Hook."
+        assert payload.quiz == partial  # delivered, not raised
+
+    def test_generate_quiz_failure_with_no_salvage_delivers_empty_quiz(self):
+        # Even when nothing can be salvaged, deliver_node returns a payload with
+        # an empty quiz (the Play_Surface treats it as skippable) — never a 500.
+        with (
+            patch.object(game, "intuition", return_value={"hook": "Hook."}),
+            patch.object(game, "clip_query", return_value={"query": "q"}),
+            patch.object(game.youtube, "youtube_search", return_value=None),
+            patch.object(game.youtube, "_fetch_transcript", return_value=None),
+            patch.object(game, "generate_quiz", side_effect=ValueError("could not produce 3")),
+            patch.object(game, "_best_effort_quiz", return_value=[]),
+        ):
+            payload = game.deliver_node("recursion", "backtracking")
+
+        assert payload.quiz == []
+        assert payload.hook == "Hook."
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
