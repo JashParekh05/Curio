@@ -1,0 +1,74 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`QuizQuestionList brutalist option states (preserved verbatim) > renders identical markup for a graded quiz (snapshot) 1`] = `
+<div>
+  <div
+    class="space-y-3"
+  >
+    <div
+      class="space-y-1.5"
+    >
+      <p
+        class="text-ink text-xs font-bold"
+      >
+        What is 2 + 2?
+      </p>
+      <button
+        class="w-full text-left text-xs px-3 py-2 border-2 rounded-none font-medium transition-all duration-75 border-ink bg-accent-lime text-ink font-bold"
+        disabled=""
+      >
+        4
+      </button>
+      <button
+        class="w-full text-left text-xs px-3 py-2 border-2 rounded-none font-medium transition-all duration-75 border-ink bg-accent-pink text-white font-bold"
+        disabled=""
+      >
+        5
+      </button>
+      <button
+        class="w-full text-left text-xs px-3 py-2 border-2 rounded-none font-medium transition-all duration-75 border-ink/30 bg-white/40 text-ink/40"
+        disabled=""
+      >
+        22
+      </button>
+      <p
+        class="brutal bg-white text-ink text-[11px] font-medium px-2 py-1.5 mt-1"
+      >
+        Two plus two is four.
+      </p>
+    </div>
+    <div
+      class="space-y-1.5"
+    >
+      <p
+        class="text-ink text-xs font-bold"
+      >
+        Capital of France?
+      </p>
+      <button
+        class="w-full text-left text-xs px-3 py-2 border-2 rounded-none font-medium transition-all duration-75 border-ink bg-accent-lime text-ink font-bold"
+        disabled=""
+      >
+        Paris
+      </button>
+      <button
+        class="w-full text-left text-xs px-3 py-2 border-2 rounded-none font-medium transition-all duration-75 border-ink/30 bg-white/40 text-ink/40"
+        disabled=""
+      >
+        Rome
+      </button>
+      <button
+        class="w-full text-left text-xs px-3 py-2 border-2 rounded-none font-medium transition-all duration-75 border-ink/30 bg-white/40 text-ink/40"
+        disabled=""
+      >
+        Berlin
+      </button>
+      <p
+        class="brutal bg-white text-ink text-[11px] font-medium px-2 py-1.5 mt-1"
+      >
+        Paris is the capital of France.
+      </p>
+    </div>
+  </div>
+</div>
+`;

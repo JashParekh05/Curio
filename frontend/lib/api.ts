@@ -473,3 +473,81 @@ export async function getRemediation(
     return [];
   }
 }
+
+// --- adaptive learning game ------------------------------------------------
+//
+// The Play_Surface (frontend/app/play/page.tsx) drives the adaptive loop over
+// HTTP via the Game_Router (`/api/game/*`, Req 13). These three functions mirror
+// the backend wire contract in `backend/app/api/game.py` and reuse the same
+// `API_BASE = NEXT_PUBLIC_API_URL` + `Authorization: Bearer <token>` pattern as
+// the rest of this module (Req 22.6). The shared wire types (ProbeQuestion,
+// NodeClip, DecideResponse) live in `lib/game-progress.ts` alongside the
+// localStorage codec; they are imported type-only here so this module stays a
+// plain (non-client) lib.
+
+import type { ProbeQuestion, NodeClip, DecideResponse } from "./game-progress";
+
+// Response of POST /api/game/session — a started session plus its 6-question
+// placement probe (Req 13.3, 2.1).
+export interface SessionStartResponse {
+  session_id: string;
+  goal: string; // the Goal_Node (the entered topic)
+  current_node: string; // == goal at start
+  probe: ProbeQuestion[]; // exactly 6
+}
+
+// Body of POST /api/game/decide — the graded quiz just taken plus the session
+// context the stateless backend needs to band + decide (Req 13.4).
+export interface DecideGameRequest {
+  goal: string;
+  current_node: string;
+  path: string[]; // nodes already visited (Req 6.3)
+  questions: ProbeQuestion[]; // the quiz just taken
+  answers: number[]; // chosen option index per question
+}
+
+// Response of POST /api/game/node — a node's intuition + clip + checkpoint quiz
+// (Req 13.5, 7, 9–11). `clip` is null when no clip is affordable (Req 10.4).
+export interface NodeResponse {
+  node: string;
+  hook: string; // Intuition_Card
+  clip: NodeClip | null;
+  quiz: ProbeQuestion[]; // 3 validated MCQs
+}
+
+// Start a session for a topic and fetch the placement probe (Req 1, 2, 13.3).
+// Throws on a non-ok response (e.g. a 502 `probe_generation_failed`) so the
+// Play_Surface can surface a retry affordance.
+export async function startGameSession(topic: string, token: string): Promise<SessionStartResponse> {
+  const res = await fetch(`${API_BASE}/api/game/session`, {
+    method: "POST",
+    headers: authHeaders(token),
+    body: JSON.stringify({ topic }),
+  });
+  if (!res.ok) throw new Error("Failed to start game session");
+  return res.json();
+}
+
+// Grade the answers server-side, compute the Score_Band in code, and return the
+// banded next-step decision from `decide_next` (Req 3–6, 8, 13.4).
+export async function decideGame(req: DecideGameRequest, token: string): Promise<DecideResponse> {
+  const res = await fetch(`${API_BASE}/api/game/decide`, {
+    method: "POST",
+    headers: authHeaders(token),
+    body: JSON.stringify(req),
+  });
+  if (!res.ok) throw new Error("Failed to decide next step");
+  return res.json();
+}
+
+// Deliver a node: its Intuition_Card hook, a short clip (or null), and a fresh
+// 3-question checkpoint quiz (Req 7, 9–11, 13.5).
+export async function deliverGameNode(node: string, goal: string, token: string): Promise<NodeResponse> {
+  const res = await fetch(`${API_BASE}/api/game/node`, {
+    method: "POST",
+    headers: authHeaders(token),
+    body: JSON.stringify({ node, goal }),
+  });
+  if (!res.ok) throw new Error("Failed to deliver node");
+  return res.json();
+}

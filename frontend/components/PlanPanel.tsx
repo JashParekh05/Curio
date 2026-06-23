@@ -16,7 +16,7 @@ import {
   QuizQuestionList,
   pointsFor,
   type AnswerState,
-} from "@/components/SoftCheckpointCard";
+} from "@/components/QuizCard";
 
 export interface PlanTopic {
   slug: string;
