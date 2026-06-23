@@ -151,19 +151,24 @@ def _rank_candidates(videos: list[dict], query: str) -> list[dict]:
 
 def _node_transcribe(state: PipelineState) -> dict:
     """Candidate bounding: we search 6 videos for recall, but only transcribe +
-    keep the top few that actually have transcripts. Segmentation downstream is
-    the bottleneck (one LLM call per video), so capping here cuts time-to-clips
-    and OpenAI cost ~6-12x. The first section keeps just one video so the very
-    first clip lands fastest (progressive backfill handles the rest).
+    keep the single best one that actually has a transcript. Segmentation
+    downstream is the bottleneck (one LLM call per video) AND every successful
+    transcript fetch is a paid TranscriptAPI credit, so capping at one per beat
+    bounds both cost ~6-12x and credit burn. A topic still gets a full 4-beat
+    arc -- one source video per beat -- and progressive backfill / reseed can
+    widen a beat later if its Watch_Quality is low.
 
-    Candidates are relevance-ranked first, so the one(s) we keep are the best
+    Candidates are relevance-ranked first, so the one we keep is the best
     semantic match to the section query, not just YouTube's top result."""
     from app.services.youtube import _fetch_transcript
 
     query = state.get("search_query") or state.get("topic_name", "")
     candidates = _rank_candidates(state["videos"], query)
 
-    limit = 1 if state.get("section_index") == 0 else 2
+    # One paid transcript per beat (was 2 for sections 1-3). Failed fetches are
+    # free on TranscriptAPI ("only pay for successful"), so the loop still scans
+    # past caption-less candidates to find the one it keeps.
+    limit = 1
     kept, errors = [], []
     for v in candidates:
         if len(kept) >= limit:

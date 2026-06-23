@@ -14,10 +14,10 @@ allowed). ASCII only.
 import time
 
 # Each self-heal attempt runs the section pipeline (~4 YouTube searches x 100
-# units = ~400 units) against a 10,000 units/day free quota. Capping attempts
-# per slug bounds worst-case spend to ~1,200 units (3 x 400) before a topic goes
-# terminal, leaving headroom for many distinct topics in a day.
-MAX_SELF_HEAL_ATTEMPTS = 3
+# units = ~400 units, plus ~4 paid TranscriptAPI credits) against a 10,000
+# units/day free quota. Capping attempts per slug bounds worst-case spend before
+# a topic goes terminal, leaving headroom for many distinct topics in a day.
+MAX_SELF_HEAL_ATTEMPTS = 2
 # Cooldown between attempts for the same slug. The feed polls every ~4s; a 5-min
 # window means a failing topic is retried at most once per 5 min instead of
 # every poll (~75x fewer triggers), and reaches the cap after ~10 min.
