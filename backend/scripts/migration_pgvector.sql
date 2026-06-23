@@ -55,7 +55,10 @@ begin
   if existing is null then
     merged := p_new_taste;
   else
-    merged := (1 - p_alpha) * existing + p_alpha * p_new_taste;
+    -- pgvector defines scalar multiply as (vector * float); the vector MUST be
+    -- on the left. Writing (float * vector) raises
+    -- "operator does not exist: double precision * vector".
+    merged := existing * (1 - p_alpha) + p_new_taste * p_alpha;
   end if;
   insert into user_profiles (user_id, taste_vector) values (p_user_id, merged)
     on conflict (user_id) do update set taste_vector = excluded.taste_vector;
