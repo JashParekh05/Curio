@@ -70,7 +70,18 @@ def _anchored_topic_questions(topic_slug: str, anchor: stage_anchor.QuestionAnch
             f"topic-wide read: {e}"
         )
         return _topic_questions(topic_slug)
-    return res.data or []
+
+    rows = res.data or []
+    if rows:
+        return rows
+
+    # No questions match this exact (stage, section_index) anchor yet -- the
+    # topic's quizzes were generated topic-wide (the live self-heal path) rather
+    # than per-beat, so a strict anchor match is empty. Rather than show a blank
+    # checkpoint card, fall back to the topic's available questions so the card is
+    # always populated (Req 4.3). Beat-anchored generation, when it runs, will
+    # narrow this to that beat's questions.
+    return _topic_questions(topic_slug)
 
 
 def _topic_has_clips(topic_slug: str) -> bool:
