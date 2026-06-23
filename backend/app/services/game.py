@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -163,6 +164,63 @@ def _view_count(clip: dict) -> int:
 def _has_caption(clip: dict) -> bool:
     """Best-effort ``has_caption`` flag for a clip dict (defaults to False)."""
     return bool((clip or {}).get("has_caption"))
+
+
+# Lead-in / filler words that carry no topical signal, stripped before scoring a
+# clip's relevance to a node so the match keys on the real subject terms.
+_CLIP_STOPWORDS = frozenset(
+    {
+        "the", "a", "an", "of", "to", "and", "or", "in", "on", "for", "with",
+        "how", "what", "why", "is", "are", "do", "does", "your", "you", "about",
+        "learn", "learning", "teach", "teaching", "me", "into", "intro",
+        "introduction", "basics", "basic", "understand", "understanding",
+        "explained", "explainer", "guide", "tutorial", "overview", "concept",
+        "concepts", "this", "that", "from", "as", "it", "its",
+    }
+)
+
+
+def _topic_tokens(text: str) -> set[str]:
+    """Lowercased subject tokens of ``text`` (>=3 chars, stopwords removed).
+
+    Used to score how on-topic a clip is for a node/goal; filler like "learn",
+    "intro", "explained" is dropped so only the real subject words remain.
+    """
+    words = re.findall(r"[a-z0-9]+", (text or "").lower())
+    return {w for w in words if len(w) >= 3 and w not in _CLIP_STOPWORDS}
+
+
+def relevant_clips(clips: list[dict], node: str, goal: str) -> list[dict]:
+    """Keep only clips whose title/description are on-topic for the node (Req 10).
+
+    ``select_clip`` ranks purely by duration / captions / views, so an off-topic
+    but popular clip could win — e.g. an "imperialism" node landing on an
+    unrelated history video. This pre-filter drops candidates whose title +
+    description share no subject term with the node (the goal's terms count as a
+    weaker secondary signal), keeping the result ON-TOPIC before duration
+    ranking. Order is preserved so ``select_clip`` stays deterministic.
+
+    Safe by construction: if the filter would remove every clip (e.g. sparse
+    metadata), it returns the original list unchanged so a clip is never lost —
+    a possibly-loose clip still beats no clip (the checkpoint stays soft).
+    """
+    node_tokens = _topic_tokens(node)
+    goal_tokens = _topic_tokens(goal)
+    if not node_tokens and not goal_tokens:
+        return clips
+
+    kept: list[dict] = []
+    for clip in clips or []:
+        c = clip or {}
+        hay = _topic_tokens(f"{c.get('title', '')} {c.get('description', '')}")
+        node_hits = len(node_tokens & hay)
+        goal_hits = len(goal_tokens & hay)
+        # On-topic when the clip shares a node term, or (when the node yields no
+        # usable terms) a goal term.
+        if node_hits > 0 or (not node_tokens and goal_hits > 0):
+            kept.append(clip)
+    # Never strand the node with no clip when nothing matched.
+    return kept or clips
 
 
 def select_clip(clips: list[dict]) -> dict | None:
@@ -482,6 +540,12 @@ CHECKPOINT_QUESTION_COUNT = 3
 # One initial generation plus up to this many backfill re-invocations to reach
 # three valid questions (Req 11.7).
 MAX_QUIZ_BACKFILL_ATTEMPTS = 3
+# The per-question LLM quality judge is an extra gate on top of structural
+# validation. Enabled by default; set GAME_QUIZ_JUDGE=0 to skip it and shave a
+# round-trip off node delivery (structural _validate_question still applies).
+_QUIZ_JUDGE_ENABLED = os.environ.get("GAME_QUIZ_JUDGE", "1").strip().lower() not in (
+    "0", "false", "no", "off",
+)
 
 # The verbatim ``generate_quiz`` prompt — the source of truth from the
 # requirements' "LLM Functions (Source of Truth)": a 3-question checkpoint quiz
@@ -568,11 +632,20 @@ def _generate_quiz_attempt(node: str, transcript: str | None) -> list[dict]:
     if not valid:
         return []
 
-    # The reused quiz judge is one LLM round-trip PER question; running them
-    # back-to-back is the dominant cost of a checkpoint. Judge them concurrently
-    # so the wall-time is ~one round-trip instead of N. A judge call that raises
-    # drops only that question (best-effort), never the batch — mirroring
-    # ``quiz._vet_questions``. ``executor.map`` preserves input order.
+    # The reused quiz judge is one LLM round-trip PER question — an extra quality
+    # gate on top of the structural _validate_question filter. It can be disabled
+    # for speed via GAME_QUIZ_JUDGE=0 (the questions still pass full structural
+    # validation; only the LLM quality vetting is skipped), removing those
+    # round-trips entirely from node delivery.
+    if not _QUIZ_JUDGE_ENABLED:
+        for question in valid:
+            if not question.get("concept_tag"):
+                question["concept_tag"] = node
+        return valid
+
+    # Judge the candidates concurrently rather than back-to-back so the wall-time
+    # is ~one round-trip instead of N. A judge call that raises drops only that
+    # question (best-effort), never the batch. ``executor.map`` preserves order.
     def _judged(question: dict) -> dict | None:
         try:
             verdict = quiz._judge_question(node, question)
@@ -704,6 +777,7 @@ You want a SHORT, punchy explainer — roughly a 3 to 10 minute focused video th
 
 Your query MUST:
 - target a SHORT focused explainer of "{node}" (the kind of 3-10 minute video that explains one idea well)
+- stay tightly ON-TOPIC for "{node}" as it relates to "{goal}" — include the most specific, disambiguating terms so results are about THIS concept, not a same-named topic in another field or a loosely related tangent
 - NOT name any specific channel, creator, or person
 - NOT contain the phrase "full course" or ask for a course, playlist, or full lecture series
 - be a concise search string, not a sentence
@@ -1320,7 +1394,9 @@ def _resolve_clip(node: str, goal: str) -> tuple[dict | None, str | None]:
     if not clips:
         return None, None
 
-    clip_out = _build_clip(select_clip(clips))
+    # Drop off-topic candidates before duration ranking so the chosen clip is
+    # actually about this node (Req 10), not just well-sized/popular.
+    clip_out = _build_clip(select_clip(relevant_clips(clips, node, goal)))
     if clip_out is None:
         return None, None
 
