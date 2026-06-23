@@ -54,10 +54,11 @@ def _quiz_questions() -> list[dict]:
 
 def _clip(video_id: str = "vid12345678") -> dict:
     """A raw youtube clip dict in the short-explainer ideal range so the real
-    ``select_clip`` picks it deterministically."""
+    ``select_clip`` picks it. Title/description mention the node ("recursion")
+    so it survives the on-topic relevance filter these tests run through."""
     return {
         "video_id": video_id,
-        "title": "A Short Focused Explainer",
+        "title": "Recursion: a short focused explainer",
         "channel_title": "Some Channel",
         "duration_seconds": 120,  # ideal 60-180s range
         "has_caption": True,

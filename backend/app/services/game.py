@@ -200,9 +200,13 @@ def relevant_clips(clips: list[dict], node: str, goal: str) -> list[dict]:
     weaker secondary signal), keeping the result ON-TOPIC before duration
     ranking. Order is preserved so ``select_clip`` stays deterministic.
 
-    Safe by construction: if the filter would remove every clip (e.g. sparse
-    metadata), it returns the original list unchanged so a clip is never lost —
-    a possibly-loose clip still beats no clip (the checkpoint stays soft).
+    Safe by construction for the game's UX: a wrong clip (an unrelated viral
+    short winning on duration/views) is worse than no clip, so when NO candidate
+    is on-topic this returns an empty list — ``deliver_node`` then shows the node
+    with its Intuition_Scroll + a transcript-free quiz and no video (Req 10.4,
+    10.6), rather than an embarrassing off-topic video. When the node yields no
+    usable subject terms at all, relevance can't be judged, so the candidates are
+    returned unchanged.
     """
     node_tokens = _topic_tokens(node)
     goal_tokens = _topic_tokens(goal)
@@ -213,14 +217,13 @@ def relevant_clips(clips: list[dict], node: str, goal: str) -> list[dict]:
     for clip in clips or []:
         c = clip or {}
         hay = _topic_tokens(f"{c.get('title', '')} {c.get('description', '')}")
-        node_hits = len(node_tokens & hay)
-        goal_hits = len(goal_tokens & hay)
-        # On-topic when the clip shares a node term, or (when the node yields no
-        # usable terms) a goal term.
-        if node_hits > 0 or (not node_tokens and goal_hits > 0):
+        # On-topic when the clip shares a term with the specific node OR the
+        # broader goal (a clip about the overall subject is still on-subject for
+        # a sub-concept node). True junk (no node and no goal overlap) is dropped.
+        if (node_tokens & hay) or (goal_tokens & hay):
             kept.append(clip)
-    # Never strand the node with no clip when nothing matched.
-    return kept or clips
+    # No off-topic fallback: an unrelated clip is worse than none for the game.
+    return kept
 
 
 def select_clip(clips: list[dict]) -> dict | None:

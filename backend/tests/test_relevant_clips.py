@@ -40,11 +40,12 @@ class TestRelevantClips:
         ids = [c["video_id"] for c in kept]
         assert ids == ["ok"]
 
-    def test_falls_back_to_all_when_nothing_matches(self):
-        # Sparse/odd metadata: nothing overlaps -> never strand, keep them all.
+    def test_returns_empty_when_nothing_matches(self):
+        # Sparse/odd metadata with no subject overlap: prefer NO clip over an
+        # off-topic one — deliver_node then shows the node with no video.
         clips = [_clip("a", "Untitled"), _clip("b", "Clip 2")]
         kept = game.relevant_clips(clips, "photosynthesis", "biology")
-        assert kept == clips
+        assert kept == []
 
     def test_preserves_order_of_relevant_clips(self):
         clips = [
@@ -74,5 +75,5 @@ class TestRelevantClips:
         # "explained"/"guide" are filler and must not create a false match.
         clips = [_clip("filler", "A complete guide, explained: tutorial overview")]
         kept = game.relevant_clips(clips, "mitosis", "cell biology")
-        # No real subject overlap -> filtered out, then fallback returns all.
-        assert kept == clips  # fallback (nothing genuinely matched)
+        # No real subject overlap -> no clip (better than an off-topic one).
+        assert kept == []
