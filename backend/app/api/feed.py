@@ -614,7 +614,7 @@ async def get_feed(
 
 
 @router.get("/discover/{user_id}", response_model=DiscoverResponse)
-async def get_discover_feed(user_id: str, background_tasks: BackgroundTasks, limit: int = Query(20, le=50), exclude: str | None = Query(None), caller_id: str = Depends(require_user)):
+async def get_discover_feed(user_id: str, background_tasks: BackgroundTasks, limit: int = Query(20, le=50), exclude: str | None = None, caller_id: str = Depends(require_user)):
     # Trust the authenticated caller as the source of truth; never 403 on a
     # path-param mismatch (which silently broke the feed for anonymous/guest
     # sessions whose token sub differs from a stale path param). Self-lookup only.
@@ -734,6 +734,33 @@ async def get_discover_feed(user_id: str, background_tasks: BackgroundTasks, lim
         user_id=user_id,
     )
     return DiscoverResponse(clips=clips, processing=len(clips) == 0)
+
+
+@router.get("/guest/progress")
+async def get_guest_progress(caller_id: str = Depends(require_user)):
+    """Server-side guest clip count for the signup gate, keyed on the
+    (anonymous) auth user_id. Fail-open: returns 0 if the table/RPC is absent so
+    the client falls back to its localStorage counter (migration_guest_progress.sql).
+    Two-segment path avoids the dynamic /{topic_slug} and /{clip_id}/events routes."""
+    db = get_client()
+    try:
+        res = db.table("guest_progress").select("clips_watched").eq("user_id", caller_id).limit(1).execute()
+        return {"clips_watched": (res.data[0]["clips_watched"] if res.data else 0)}
+    except Exception as e:
+        logger.warning(f"[feed] guest_progress read failed for {caller_id}: {e}")
+        return {"clips_watched": 0}
+
+
+@router.post("/guest/increment")
+async def increment_guest_progress(caller_id: str = Depends(require_user)):
+    """Atomically increment + return the caller's guest clip count. Fail-open."""
+    db = get_client()
+    try:
+        res = db.rpc("increment_guest_clips", {"p_user_id": caller_id}).execute()
+        return {"clips_watched": int(res.data) if res.data is not None else 0}
+    except Exception as e:
+        logger.warning(f"[feed] increment_guest_clips failed for {caller_id}: {e}")
+        return {"clips_watched": 0}
 
 
 @router.post("/{clip_id}/events", status_code=204)

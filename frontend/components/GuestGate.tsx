@@ -7,9 +7,11 @@ import {
   isGateDismissed,
   dismissGate,
   isHardGated,
+  syncGuestClips,
   GUEST_GATE_THRESHOLD,
   GUEST_CLIP_EVENT,
 } from "@/lib/guest-progress";
+import { getGuestProgress } from "@/lib/api";
 import UpgradeModal from "./UpgradeModal";
 import { Button } from "@/components/pop/Button";
 
@@ -18,7 +20,7 @@ import { Button } from "@/components/pop/Button";
 // after the hard limit, a non-dismissible modal blocks further watching until they
 // create an account. Their progress carries over (same user_id on upgrade).
 export default function GuestGate() {
-  const { isGuest } = useAuth();
+  const { isGuest, session } = useAuth();
   const [show, setShow] = useState(false);
   const [hardGated, setHardGated] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
@@ -35,11 +37,20 @@ export default function GuestGate() {
       setShow(!isGateDismissed() && clips >= GUEST_GATE_THRESHOLD);
     };
     evaluate();
+    // Reconcile with the server-authoritative count (keyed on the anon user_id)
+    // so clearing localStorage can't reset the gate, and it follows the identity
+    // across devices. syncGuestClips dispatches GUEST_CLIP_EVENT, which re-runs
+    // evaluate() via the listener below. Fail-open: a 0/error just keeps local.
+    if (session?.access_token) {
+      getGuestProgress(session.access_token)
+        .then((server) => syncGuestClips(server))
+        .catch(() => {});
+    }
     // The clip counter is bumped from telemetry (not React state); this event
     // lets the banner/wall appear the moment a threshold is crossed.
     window.addEventListener(GUEST_CLIP_EVENT, evaluate);
     return () => window.removeEventListener(GUEST_CLIP_EVENT, evaluate);
-  }, [isGuest]);
+  }, [isGuest, session?.access_token]);
 
   // Hard wall takes precedence over the dismissible banner.
   const showBanner = isGuest && show && !hardGated && !modalOpen;
