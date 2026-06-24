@@ -3,7 +3,7 @@ import random
 import logging
 
 from app.models.schemas import Clip
-from app.services.feed_scoring import _get_clip_population_stats, _compute_scores, _spread_by_source, DISCOVER_WEIGHTS
+from app.services.feed_scoring import _get_clip_population_stats, _compute_scores, _spread_by_source, _diversify_by_topic, DISCOVER_WEIGHTS
 from app.services.arc_unifier import CanonicalArc
 from app.services.arc_unifier_store import load_canonical_arc
 from app.services.clip_ordering import order_clips_by_arc
@@ -187,4 +187,10 @@ def _fetch_discover_clips(
     rest = clips[top_n:]
     if rest and explore_n > 0:
         selected = selected + random.sample(rest, min(explore_n, len(rest)))
-    return _spread_by_source(selected[:limit])
+    # Re-sort (exploration picks were appended out of score order), then
+    # diversify by topic so the feed never clumps many same-topic clips in a row
+    # (TikTok's "no two in a row from the same creator/sound", applied to topic).
+    # This is the ordering fix for the "5 westward-expansion clips in a row"
+    # clumping; source-spread is subsumed since adjacent clips differ in topic.
+    selected.sort(key=lambda c: c.final_score or 0.0, reverse=True)
+    return _diversify_by_topic(selected[:limit])

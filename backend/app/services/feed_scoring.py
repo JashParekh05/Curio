@@ -200,3 +200,28 @@ def _spread_by_source(clips: list[Clip]) -> list[Clip]:
             if by_source[k]:
                 result.append(by_source[k].pop(0))
     return result
+
+
+def _diversify_by_topic(clips: list[Clip], window: int = 1) -> list[Clip]:
+    """Greedy diversity re-rank with category = topic (MMR-style).
+
+    Input is assumed score-sorted (descending). Walks the list greedily, at each
+    step appending the highest-scored remaining clip whose ``topic_slug`` is not
+    among the previous ``window`` chosen clips' topics. When every remaining clip
+    repeats a recent topic (only one topic left), it falls back to the top
+    remaining clip. This preserves personalization (strong clips still surface
+    early) while guaranteeing no run of same-topic clips — mirroring TikTok's
+    "won't recommend two videos in a row from the same creator/sound", applied to
+    topic so the discover feed stays varied instead of clumping (e.g. five
+    "westward expansion" clips in a row). Source-spread is subsumed: adjacent
+    clips differ in topic and therefore in source video.
+    """
+    if len(clips) <= 2:
+        return clips
+    remaining = list(clips)
+    result: list[Clip] = []
+    while remaining:
+        recent = {c.topic_slug for c in result[-window:]}
+        pick = next((i for i, c in enumerate(remaining) if c.topic_slug not in recent), 0)
+        result.append(remaining.pop(pick))
+    return result
