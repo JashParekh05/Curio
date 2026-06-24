@@ -129,6 +129,14 @@ export default function Home() {
             ))}
           </div>
         </div>
+
+        {/* Secondary mode: deliberate Learn (type a topic -> ordered path -> clips) */}
+        <div className="flex flex-col gap-2 pt-3 mt-1 border-t border-outline">
+          <p className="text-on-surface-muted text-sm">Know exactly what you want to learn?</p>
+          <Button variant="soft" size="lg" onClick={() => router.push("/learn")}>
+            Learn a specific topic →
+          </Button>
+        </div>
       </div>
       <LegalFooter />
     </main>
