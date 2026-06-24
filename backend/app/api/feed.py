@@ -614,9 +614,11 @@ async def get_feed(
 
 
 @router.get("/discover/{user_id}", response_model=DiscoverResponse)
-async def get_discover_feed(user_id: str, background_tasks: BackgroundTasks, limit: int = Query(20, le=50), caller_id: str = Depends(require_user)):
-    if caller_id != user_id:
-        raise HTTPException(status_code=403, detail="Access denied")
+async def get_discover_feed(user_id: str, background_tasks: BackgroundTasks, limit: int = Query(20, le=50), exclude: str | None = Query(None), caller_id: str = Depends(require_user)):
+    # Trust the authenticated caller as the source of truth; never 403 on a
+    # path-param mismatch (which silently broke the feed for anonymous/guest
+    # sessions whose token sub differs from a stale path param). Self-lookup only.
+    user_id = caller_id
     db = get_client()
 
     # Single query: user profile with accumulated vectors
@@ -658,6 +660,11 @@ async def get_discover_feed(user_id: str, background_tasks: BackgroundTasks, lim
             seen_ids = {e["clip_id"] for e in events.data}
     except Exception as e:
         logger.warning(f"[feed] Failed to build seen_ids for user={user_id}: {e}")
+
+    # Merge client-known in-session clip ids so successive load-more calls never
+    # re-return clips already on screen (their telemetry may not be flushed yet).
+    if exclude:
+        seen_ids.update(cid for cid in exclude.split(",") if cid)
 
     try:
         all_topics = db.table("topics").select("slug").execute()

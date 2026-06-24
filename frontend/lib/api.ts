@@ -202,8 +202,11 @@ export interface DiscoverFeed {
   processing: boolean;
 }
 
-export async function getDiscoverFeed(userId: string, token: string): Promise<DiscoverFeed> {
-  const res = await fetch(`${API_BASE}/api/feed/discover/${encodeURIComponent(userId)}`, {
+export async function getDiscoverFeed(userId: string, token: string, excludeIds: string[] = []): Promise<DiscoverFeed> {
+  // Send already-seen clip ids (capped) so load-more never re-returns clips the
+  // user is already scrolling — their telemetry may not be flushed/written yet.
+  const exclude = excludeIds.length ? `?exclude=${encodeURIComponent(excludeIds.slice(-200).join(","))}` : "";
+  const res = await fetch(`${API_BASE}/api/feed/discover/${encodeURIComponent(userId)}${exclude}`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) return { clips: [], processing: false };

@@ -35,6 +35,16 @@ export default function DiscoverPage() {
   sessionTokenRef.current = session?.access_token ?? "";
   isGuestRef.current = isGuest;
 
+  // Record clip ids as seen (in-session dedupe) and BOUND the set so a long
+  // session can't grow it unbounded — the most-recent ids are kept (Set is
+  // insertion-ordered) and also sent to the backend as `exclude` so load-more
+  // never re-returns clips already on screen.
+  const markSeen = useCallback((ids: string[]) => {
+    const s = seenClipIdsRef.current;
+    for (const id of ids) s.add(id);
+    if (s.size > 500) seenClipIdsRef.current = new Set(Array.from(s).slice(-300));
+  }, []);
+
   // Load the feed exactly ONCE per signed-in user. Keyed on the primitive
   // user id (not the session/user objects) and guarded by a ref, so Supabase
   // re-emitting auth events (tab focus, token refresh) can never re-run this
@@ -45,9 +55,9 @@ export default function DiscoverPage() {
     feedLoadedForRef.current = user.id;
 
     function doFetch() {
-      getDiscoverFeed(user!.id, sessionTokenRef.current).then(({ clips: c, processing }) => {
+      getDiscoverFeed(user!.id, sessionTokenRef.current, Array.from(seenClipIdsRef.current)).then(({ clips: c, processing }) => {
         const fresh = c.filter((clip) => !seenClipIdsRef.current.has(clip.id));
-        fresh.forEach((clip) => seenClipIdsRef.current.add(clip.id));
+        markSeen(fresh.map((cl) => cl.id));
         if (fresh.length > 0) {
           setClips(fresh);
           setFetching(false);
@@ -156,10 +166,10 @@ export default function DiscoverPage() {
     if (!user || clips.length === 0 || activeIndex < clips.length - 2) return;
     if (fetchingMoreRef.current) return;
     fetchingMoreRef.current = true;
-    getDiscoverFeed(user.id, sessionTokenRef.current)
+    getDiscoverFeed(user.id, sessionTokenRef.current, Array.from(seenClipIdsRef.current))
       .then((more) => {
         const fresh = more.clips.filter((clip) => !seenClipIdsRef.current.has(clip.id));
-        fresh.forEach((clip) => seenClipIdsRef.current.add(clip.id));
+        markSeen(fresh.map((cl) => cl.id));
         setClips((prev) => [...prev, ...fresh]);
       })
       .finally(() => { fetchingMoreRef.current = false; });
@@ -378,10 +388,10 @@ export default function DiscoverPage() {
               onClick={() => {
                 if (!user || !session || loadingMore) return;
                 setLoadingMore(true);
-                getDiscoverFeed(user.id, session.access_token)
+                getDiscoverFeed(user.id, session.access_token, Array.from(seenClipIdsRef.current))
                   .then((more) => {
                     const fresh = more.clips.filter((clip) => !seenClipIdsRef.current.has(clip.id));
-                    fresh.forEach((clip) => seenClipIdsRef.current.add(clip.id));
+                    markSeen(fresh.map((cl) => cl.id));
                     setClips((prev) => [...prev, ...fresh]);
                   })
                   .finally(() => setLoadingMore(false));
