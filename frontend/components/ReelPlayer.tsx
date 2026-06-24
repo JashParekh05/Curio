@@ -9,6 +9,9 @@ interface Props {
   mode: "active" | "warm";
   onEnded: () => void;
   onFeedback?: (type: "want_more" | "already_know") => void;
+  // Optional cross-link: when provided (Discover only), shows a "Learn" action
+  // that takes the learner deeper into this clip's topic.
+  onLearnThis?: () => void;
   overlay?: OverlayMetadata;
 }
 
@@ -31,7 +34,7 @@ function sanitizeYTUrl(url: string, active: boolean): string {
   }
 }
 
-export default function ReelPlayer({ clip, mode, onEnded, onFeedback, overlay }: Props) {
+export default function ReelPlayer({ clip, mode, onEnded, onFeedback, onLearnThis, overlay }: Props) {
   const active = mode === "active";
   const videoRef = useRef<HTMLVideoElement>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -52,7 +55,6 @@ export default function ReelPlayer({ clip, mode, onEnded, onFeedback, overlay }:
   }, [clip.id]);
 
   // Native video: mute when warm, play from start on active, pause otherwise.
-  // preload="auto" keeps warm clips buffering silently.
   useEffect(() => {
     const v = videoRef.current;
     if (isYT || !v) return;
@@ -113,55 +115,70 @@ export default function ReelPlayer({ clip, mode, onEnded, onFeedback, overlay }:
       {/* Native video load error */}
       {videoError && (
         <div className="absolute inset-0 bg-black/80 flex flex-col items-center justify-center gap-4 z-10">
-          <p className="brutal-dark bg-ink text-white text-sm font-bold px-3 py-2">Couldn&apos;t load video</p>
+          <p className="text-white text-sm font-semibold">Couldn&apos;t load video</p>
           <button
             onClick={onEnded}
-            className="brutal-dark-btn bg-accent-yellow text-ink text-sm font-bold px-4 py-2"
+            className="rounded-pill bg-primary text-on-primary text-sm font-semibold px-5 py-2.5 shadow-elev-1 transition hover:brightness-[1.05]"
           >
             Skip
           </button>
         </div>
       )}
 
-      {/* Caption bar */}
+      {/* Caption — clean white text with a strong shadow for legibility over any
+          video (no hard box, no scrim covering the player's own controls). */}
       <div className="absolute bottom-28 inset-x-0 z-10 pl-4 pr-20 pb-2 pointer-events-none">
-        <span className="brutal-dark inline-block bg-ink text-white font-extrabold text-base leading-snug px-2 py-1 line-clamp-2">{overlay?.title ?? clip.title}</span>
+        <h2 className="text-white font-extrabold text-lg leading-snug line-clamp-2 drop-shadow-[0_2px_4px_rgba(0,0,0,0.85)]">
+          {overlay?.title ?? clip.title}
+        </h2>
         {(overlay?.description ?? clip.description) && (
-          <p className="text-white text-sm mt-2 leading-snug drop-shadow line-clamp-2 font-medium">{overlay?.description ?? clip.description}</p>
+          <p className="text-white/90 text-sm mt-1.5 leading-snug line-clamp-2 font-medium drop-shadow-[0_1px_3px_rgba(0,0,0,0.85)]">
+            {overlay?.description ?? clip.description}
+          </p>
         )}
       </div>
 
-      {/* Feedback buttons — vertically centered on the right edge (Reels-style) so
-          they clear the player's bottom control bar on mobile (the scrubber,
-          fullscreen, and the settings gear that holds playback speed / 2x). */}
-      {active && onFeedback && (
+      {/* Right-edge control stack (Reels-style), vertically centered so it clears
+          the player's bottom control bar on mobile. Clean glassy pills; selected
+          feedback states fill with a token color. Text labels — no emoji. */}
+      {active && (onFeedback || onLearnThis) && (
         <div className="absolute right-3 top-1/2 -translate-y-1/2 flex flex-col gap-3 items-center z-10">
-          <button
-            onClick={() => { setFeedback("want_more"); onFeedback("want_more"); }}
-            disabled={feedback !== null}
-            aria-label="I want more of this"
-            className={`brutal-dark-btn w-12 h-12 flex items-center justify-center text-[10px] font-extrabold uppercase tracking-tight disabled:cursor-default ${
-              feedback === "want_more"
-                ? "bg-accent-orange text-ink"
-                : "bg-ink text-white"
-            }`}
-            title="I want more of this"
-          >
-            More
-          </button>
-          <button
-            onClick={() => { setFeedback("already_know"); onFeedback("already_know"); }}
-            disabled={feedback !== null}
-            aria-label="I already know this topic"
-            className={`brutal-dark-btn w-12 h-12 flex items-center justify-center text-[10px] font-extrabold uppercase tracking-tight disabled:cursor-default ${
-              feedback === "already_know"
-                ? "bg-accent-lime text-ink"
-                : "bg-ink text-white"
-            }`}
-            title="I already know this topic"
-          >
-            Know
-          </button>
+          {onLearnThis && (
+            <button
+              onClick={onLearnThis}
+              aria-label="Learn this topic"
+              title="Learn this topic"
+              className="w-12 h-12 rounded-full bg-primary text-on-primary flex items-center justify-center text-[10px] font-bold uppercase tracking-tight shadow-elev-2 transition hover:brightness-[1.05]"
+            >
+              Learn
+            </button>
+          )}
+          {onFeedback && (
+            <>
+              <button
+                onClick={() => { setFeedback("want_more"); onFeedback("want_more"); }}
+                disabled={feedback !== null}
+                aria-label="I want more of this"
+                title="I want more of this"
+                className={`w-12 h-12 rounded-full backdrop-blur-sm flex items-center justify-center text-[10px] font-bold uppercase tracking-tight transition disabled:cursor-default ${
+                  feedback === "want_more" ? "bg-success text-white" : "bg-black/40 text-white hover:bg-black/55"
+                }`}
+              >
+                More
+              </button>
+              <button
+                onClick={() => { setFeedback("already_know"); onFeedback("already_know"); }}
+                disabled={feedback !== null}
+                aria-label="I already know this topic"
+                title="I already know this topic"
+                className={`w-12 h-12 rounded-full backdrop-blur-sm flex items-center justify-center text-[10px] font-bold uppercase tracking-tight transition disabled:cursor-default ${
+                  feedback === "already_know" ? "bg-surface text-on-surface" : "bg-black/40 text-white hover:bg-black/55"
+                }`}
+              >
+                Know
+              </button>
+            </>
+          )}
         </div>
       )}
     </div>

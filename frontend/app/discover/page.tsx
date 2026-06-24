@@ -351,6 +351,7 @@ export default function DiscoverPage() {
                 mode="active"
                 onEnded={() => goTo(i + 1)}
                 onFeedback={(type) => recordClipEvent(clip.id, 0, false, null, 0, type, sessionTokenRef.current)}
+                onLearnThis={() => router.push(`/feed?topic=${encodeURIComponent(clip.topic_slug)}`)}
               />
             ) : null}
           </div>
