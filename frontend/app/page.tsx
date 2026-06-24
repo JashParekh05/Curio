@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
-import { getUserHistory, getUserProfile, type LearningPathSummary } from "@/lib/api";
+import { getUserProfile } from "@/lib/api";
 import { hasSeenIntro } from "@/lib/intro";
 import LegalFooter from "@/components/LegalFooter";
 
@@ -21,18 +21,16 @@ export default function Home() {
   const router = useRouter();
   const { user, session, loading, signOut, isGuest, isAuthenticated } = useAuth();
   const [query, setQuery] = useState("");
-  const [history, setHistory] = useState<LearningPathSummary[]>([]);
 
   useEffect(() => {
     if (!user || !session) return;
     // The intro/demo carousel is the very first thing a new visitor sees —
-    // gate on it before anything else (history, onboarding) so it can't be
-    // skipped past by a faster-resolving redirect.
+    // gate on it before anything else (onboarding) so it can't be skipped past
+    // by a faster-resolving redirect.
     if (!hasSeenIntro()) {
       router.replace("/welcome");
       return;
     }
-    getUserHistory(user.id, session.access_token).then(setHistory).catch(() => {});
     if (isAuthenticated) {
       getUserProfile(user.id, session.access_token).then((p) => {
         if (!p.onboarding_complete) router.replace("/onboarding");
@@ -165,27 +163,6 @@ export default function Home() {
           Surprise me
           <span className="font-black">{">"}</span>
         </button>
-
-        {history.length > 0 && (
-          <div className="space-y-2">
-            <p className="text-ink/60 text-xs font-bold uppercase tracking-wide">Continue where you left off</p>
-            <div className="space-y-2">
-              {history.map((h) => (
-                <button
-                  key={h.session_id}
-                  onClick={() => router.push(`/feed?session=${h.session_id}`)}
-                  className="brutal-btn w-full bg-white text-left px-4 py-3 flex items-center justify-between"
-                >
-                  <div className="min-w-0">
-                    <p className="text-sm font-bold line-clamp-1">{h.user_query}</p>
-                    <p className="text-ink/50 text-xs mt-0.5">{h.topic_count} topics</p>
-                  </div>
-                  <span className="font-black text-lg shrink-0 ml-2">{">"}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
       </div>
       <LegalFooter />
     </main>

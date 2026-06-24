@@ -22,6 +22,7 @@ vi.mock("@/lib/api", () => ({
   startGameSession: vi.fn(),
   decideGame: vi.fn(),
   deliverGameNode: vi.fn(),
+  getGamePaths: vi.fn(),
 }));
 
 vi.mock("@/lib/auth-context", () => ({
@@ -29,7 +30,12 @@ vi.mock("@/lib/auth-context", () => ({
 }));
 
 import PlayPage from "./page";
-import { startGameSession, decideGame, deliverGameNode } from "@/lib/api";
+import {
+  startGameSession,
+  decideGame,
+  deliverGameNode,
+  getGamePaths,
+} from "@/lib/api";
 import {
   clearActiveGameSessionId,
   type ProbeQuestion,
@@ -39,6 +45,7 @@ import {
 const mockStart = vi.mocked(startGameSession);
 const mockDecide = vi.mocked(decideGame);
 const mockDeliver = vi.mocked(deliverGameNode);
+const mockGetPaths = vi.mocked(getGamePaths);
 
 // --- test data builders ----------------------------------------------------
 
@@ -78,10 +85,21 @@ function answerAll(prefix: string, count: number) {
   }
 }
 
+// After a session starts, the one-time QuestIntro narrative beat now precedes
+// the probe (Req 4.1). Dismiss it via "Take up the sword" to reach the probe.
+async function beginQuest() {
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Take up the sword" }),
+  );
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   clearActiveGameSessionId();
   localStorage.clear();
+  // Default: no branching forks on offer, so the existing single-path loop
+  // tests keep the Battle screen's Continue flow. Fork tests override this.
+  mockGetPaths.mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -102,7 +120,7 @@ describe("PlayPage topic entry rejects empty/whitespace topics (Req 1.3)", () =>
     expect(mockStart).not.toHaveBeenCalled();
     // No session means we stay on the topic-entry surface.
     expect(
-      screen.getByRole("heading", { name: "What do you want to learn?" }),
+      screen.getByRole("heading", { name: "Name thy quest" }),
     ).toBeInTheDocument();
   });
 
@@ -141,6 +159,8 @@ describe("PlayPage topic entry rejects empty/whitespace topics (Req 1.3)", () =>
     await waitFor(() =>
       expect(mockStart).toHaveBeenCalledWith("Backtracking", "test-token"),
     );
+    // The QuestIntro beat shows first; dismiss it to reach the probe.
+    await beginQuest();
     // We land on the probe phase.
     expect(
       await screen.findByText("Placement probe · Backtracking"),
@@ -198,6 +218,9 @@ describe("PlayPage drives probe → grading → decision → node → outcome �
     });
     fireEvent.click(screen.getByRole("button", { name: "Start the quest" }));
 
+    // The QuestIntro beat shows first; dismiss it to reach the probe.
+    await beginQuest();
+
     expect(
       await screen.findByText("Placement probe · Backtracking"),
     ).toBeInTheDocument();
@@ -218,8 +241,10 @@ describe("PlayPage drives probe → grading → decision → node → outcome �
       path: ["Backtracking"],
     });
 
-    // decision → node-delivery: continue from the DESCEND outcome.
-    fireEvent.click(screen.getByRole("button", { name: "Descend" }));
+    // decision → node-delivery: continue from the DESCEND outcome. The retro
+    // BattleScreen labels the DESCEND continue action "Retreat & train"
+    // (OutcomeCard's "Descend" twin) after the import swap.
+    fireEvent.click(screen.getByRole("button", { name: "Retreat & train" }));
 
     await waitFor(() =>
       expect(mockDeliver).toHaveBeenCalledWith(
@@ -275,5 +300,493 @@ describe("PlayPage drives probe → grading → decision → node → outcome �
     // Stayed on topic-entry; no decide/deliver happened.
     expect(mockDecide).not.toHaveBeenCalled();
     expect(mockDeliver).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 6.3 — interaction tests for the reskinned loop (Req 19.1, 19.2, 20.1).
+//
+// These extend the loop coverage above onto the retro reskin: they assert the
+// next-node prefetch still fires during the Battle screen (Property 4), the
+// full loop still reaches the goal with the engine's output rendered verbatim
+// (Property 2), and the soft empty-quiz "Try again" retry still works. The
+// `/api/game/*` engine remains mocked; the real codec runs against jsdom.
+// ---------------------------------------------------------------------------
+
+// # Feature: pixel-quest-adventure, Property 4: Prefetch is preserved
+describe("PlayPage preserves the next-node prefetch during the Battle screen (Property 4, Req 20.1)", () => {
+  it("kicks off the /node prefetch while the Battle screen is shown, before Continue, and reuses it", async () => {
+    mockStart.mockResolvedValue({
+      session_id: "s-prefetch",
+      goal: "Backtracking",
+      current_node: "Backtracking",
+      probe: questions("probe", 6),
+    });
+    // The probe resolves to a DESCEND to a prerequisite node — a decision that
+    // resolves to a next node, so the prefetch should fire (Property 4).
+    mockDecide.mockResolvedValueOnce(
+      decision({
+        action: "DESCEND",
+        band: "DESCEND",
+        next_node: "Recursion basics",
+        diagnosis: "You stumble on the base case of recursion.",
+        gap: "base case",
+        score_pct: 0.2,
+      }),
+    );
+    mockDeliver.mockResolvedValue({
+      node: "Recursion basics",
+      hook: "Recursion is a function that trusts a smaller copy of itself.",
+      clip: null,
+      quiz: questions("chk", 3),
+    });
+
+    render(<PlayPage />);
+
+    fireEvent.change(screen.getByLabelText("Your topic"), {
+      target: { value: "Backtracking" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start the quest" }));
+    await beginQuest();
+
+    await screen.findByText("Placement probe · Backtracking");
+    answerAll("probe", 6);
+    fireEvent.click(screen.getByRole("button", { name: "Submit placement" }));
+
+    // The DESCEND Battle screen is on display, with the engine diagnosis. The
+    // Continue ("Retreat & train") action has NOT been clicked yet.
+    expect(
+      await screen.findByText("You stumble on the base case of recursion."),
+    ).toBeInTheDocument();
+
+    // Property 4: the next-node prefetch already fired during the Battle screen
+    // (before any Continue), so advancing can consume the in-flight result.
+    await waitFor(() =>
+      expect(mockDeliver).toHaveBeenCalledWith(
+        "Recursion basics",
+        "Backtracking",
+        "test-token",
+      ),
+    );
+    // The prefetch fired while the Battle CTA is still present (pre-Continue).
+    expect(
+      screen.getByRole("button", { name: "Retreat & train" }),
+    ).toBeInTheDocument();
+
+    // Clicking Continue consumes the in-flight prefetch rather than issuing a
+    // fresh round-trip — so deliverGameNode is still only called once.
+    fireEvent.click(screen.getByRole("button", { name: "Retreat & train" }));
+    expect(
+      await screen.findByText(
+        "Recursion is a function that trusts a smaller copy of itself.",
+      ),
+    ).toBeInTheDocument();
+    expect(mockDeliver).toHaveBeenCalledTimes(1);
+  });
+});
+
+// # Feature: pixel-quest-adventure, Property 2: The loop reaches the goal identically to the engine
+describe("PlayPage loops through node → checkpoint and reaches the goal identically to the engine (Property 2, Req 19.1, 19.2)", () => {
+  it("completes topic-entry → QuestIntro (skip) → probe → Battle → node → checkpoint → loop → Dragon falls", async () => {
+    mockStart.mockResolvedValue({
+      session_id: "s-goal",
+      goal: "Backtracking",
+      current_node: "Backtracking",
+      probe: questions("probe", 6),
+    });
+    // Loop: DESCEND to a prerequisite, CLIMB back to the goal node, then a final
+    // CLIMB that reaches the goal (the Dragon falls). Each decision's output is
+    // the engine's — the reskin must render it verbatim, adding/dropping nothing.
+    mockDecide
+      .mockResolvedValueOnce(
+        decision({
+          action: "DESCEND",
+          band: "DESCEND",
+          next_node: "Recursion basics",
+          diagnosis: "You stumble on the base case of recursion.",
+          gap: "base case",
+          score_pct: 0.2,
+        }),
+      )
+      .mockResolvedValueOnce(
+        decision({
+          action: "CLIMB",
+          band: "CLIMB",
+          next_node: "Backtracking",
+          diagnosis: "Recursion is locked in — climb back toward the Dragon.",
+          score_pct: 0.85,
+        }),
+      )
+      .mockResolvedValueOnce(
+        decision({
+          action: "CLIMB",
+          band: "CLIMB",
+          next_node: "Backtracking",
+          reached_goal: true,
+          diagnosis: "You mastered backtracking — the Dragon is slain.",
+          score_pct: 0.95,
+        }),
+      );
+    // Deliver returns content keyed by node so it is robust to call order.
+    mockDeliver.mockImplementation(async (node: string) => {
+      if (node === "Recursion basics") {
+        return {
+          node,
+          hook: "Recursion is a function that trusts a smaller copy of itself.",
+          clip: null,
+          quiz: questions("chk", 3),
+        };
+      }
+      return {
+        node,
+        hook: "The Dragon's lair lies just beyond the ridge.",
+        clip: null,
+        quiz: questions("goalchk", 3),
+      };
+    });
+
+    render(<PlayPage />);
+
+    // topic-entry → QuestIntro (skip) → probe.
+    fireEvent.change(screen.getByLabelText("Your topic"), {
+      target: { value: "Backtracking" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start the quest" }));
+    await beginQuest();
+    await screen.findByText("Placement probe · Backtracking");
+
+    // probe → DESCEND Battle.
+    answerAll("probe", 6);
+    fireEvent.click(screen.getByRole("button", { name: "Submit placement" }));
+    expect(
+      await screen.findByText("You stumble on the base case of recursion."),
+    ).toBeInTheDocument();
+
+    // Battle → node (prerequisite) → intuition → checkpoint.
+    fireEvent.click(screen.getByRole("button", { name: "Retreat & train" }));
+    expect(
+      await screen.findByText(
+        "Recursion is a function that trusts a smaller copy of itself.",
+      ),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Take the checkpoint" }));
+    await screen.findByText("Checkpoint · Recursion basics");
+
+    // checkpoint → CLIMB Battle (loop back toward the goal node).
+    answerAll("chk", 3);
+    fireEvent.click(screen.getByRole("button", { name: "Submit checkpoint" }));
+    expect(
+      await screen.findByText(
+        "Recursion is locked in — climb back toward the Dragon.",
+      ),
+    ).toBeInTheDocument();
+
+    // Advance → goal node delivered → intuition → checkpoint.
+    fireEvent.click(screen.getByRole("button", { name: "Advance" }));
+    expect(
+      await screen.findByText("The Dragon's lair lies just beyond the ridge."),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Take the checkpoint" }));
+    await screen.findByText("Checkpoint · Backtracking");
+
+    // checkpoint → final CLIMB that reaches the goal: the Dragon falls and the
+    // quest is complete — the engine's goal-reached output rendered verbatim.
+    answerAll("goalchk", 3);
+    fireEvent.click(screen.getByRole("button", { name: "Submit checkpoint" }));
+    expect(await screen.findByText("The Dragon falls!")).toBeInTheDocument();
+    expect(
+      screen.getByText("You mastered backtracking — the Dragon is slain."),
+    ).toBeInTheDocument();
+    // Quest-complete: the reach-goal surface offers a fresh quest, not a Continue.
+    expect(
+      screen.getByRole("button", { name: "Start a new quest" }),
+    ).toBeInTheDocument();
+
+    // The loop reached the goal exactly via the engine's three decisions, with
+    // the third carrying the goal node as the current node.
+    await waitFor(() => expect(mockDecide).toHaveBeenCalledTimes(3));
+    expect(mockDecide.mock.calls[2][0]).toMatchObject({
+      current_node: "Backtracking",
+    });
+  });
+});
+
+// --- soft empty-quiz checkpoint retry (Req 19.2 / soft-checkpoint contract) --
+
+describe("PlayPage offers a soft retry when a delivered checkpoint quiz is empty", () => {
+  it("shows 'Try again' for an empty checkpoint quiz and re-delivers the node on retry", async () => {
+    mockStart.mockResolvedValue({
+      session_id: "s-empty",
+      goal: "Backtracking",
+      current_node: "Backtracking",
+      probe: questions("probe", 6),
+    });
+    mockDecide.mockResolvedValueOnce(
+      decision({
+        action: "DESCEND",
+        band: "DESCEND",
+        next_node: "Recursion basics",
+        diagnosis: "You stumble on the base case of recursion.",
+        gap: "base case",
+        score_pct: 0.2,
+      }),
+    );
+    // First delivery comes back with an empty quiz (soft checkpoint); the retry
+    // re-fetches the node and returns a usable checkpoint quiz.
+    mockDeliver
+      .mockResolvedValueOnce({
+        node: "Recursion basics",
+        hook: "Recursion is a function that trusts a smaller copy of itself.",
+        clip: null,
+        quiz: [],
+      })
+      .mockResolvedValueOnce({
+        node: "Recursion basics",
+        hook: "Recursion is a function that trusts a smaller copy of itself.",
+        clip: null,
+        quiz: questions("chk", 3),
+      });
+
+    render(<PlayPage />);
+
+    fireEvent.change(screen.getByLabelText("Your topic"), {
+      target: { value: "Backtracking" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start the quest" }));
+    await beginQuest();
+    await screen.findByText("Placement probe · Backtracking");
+
+    answerAll("probe", 6);
+    fireEvent.click(screen.getByRole("button", { name: "Submit placement" }));
+    await screen.findByText("You stumble on the base case of recursion.");
+
+    // Battle → node → intuition → checkpoint beat (empty quiz).
+    fireEvent.click(screen.getByRole("button", { name: "Retreat & train" }));
+    await screen.findByText(
+      "Recursion is a function that trusts a smaller copy of itself.",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Take the checkpoint" }));
+
+    // Soft checkpoint: an empty quiz never hard-blocks — it offers a retry.
+    expect(
+      await screen.findByText(
+        "We couldn't build a checkpoint for this node just now.",
+      ),
+    ).toBeInTheDocument();
+
+    // Retrying re-delivers the node: delivery restarts at the intuition beat,
+    // and advancing then reveals the usable checkpoint quiz.
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    await waitFor(() => expect(mockDeliver).toHaveBeenCalledTimes(2));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Take the checkpoint" }),
+    );
+    expect(
+      await screen.findByText("Checkpoint · Recursion basics"),
+    ).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 9.3 — learner-chosen branching forks (Req 14.1, 14.2, 14.3).
+//
+// At a (non-goal) decision the Play_Surface asks `/api/game/paths` for
+// alternative on-goal next Stages. With two+ candidates a fork is offered on the
+// World_Map (Req 14.1) and picking one advances the loop along that Stage via
+// the normal decide/node flow (Req 14.2). With fewer than two (or an
+// empty/unavailable endpoint) the surface falls back to the single
+// engine-chosen node behind the Battle screen's Continue (Req 14.3).
+// ---------------------------------------------------------------------------
+
+describe("PlayPage renders branching forks and advances on selection (Req 14.1, 14.2, 14.3)", () => {
+  it("offers the candidate Stages at a decision and advancing a fork delivers the chosen node", async () => {
+    mockStart.mockResolvedValue({
+      session_id: "s-fork",
+      goal: "Backtracking",
+      current_node: "Backtracking",
+      probe: questions("probe", 6),
+    });
+    // The probe resolves to a DESCEND with a recommended prerequisite. Because
+    // it is a non-goal decision with a next node, the fork lookup fires.
+    mockDecide.mockResolvedValueOnce(
+      decision({
+        action: "DESCEND",
+        band: "DESCEND",
+        next_node: "Recursion basics",
+        diagnosis: "You stumble on the base case of recursion.",
+        gap: "base case",
+        score_pct: 0.2,
+      }),
+    );
+    // Two candidates → a real fork (Req 14.1). The learner-chosen Stage differs
+    // from the engine's recommended `next_node`.
+    mockGetPaths.mockResolvedValue(["Recursion basics", "Trees basics"]);
+    // Deliver keyed by node so the chosen fork's content is returned.
+    mockDeliver.mockImplementation(async (node: string) => ({
+      node,
+      hook:
+        node === "Trees basics"
+          ? "A tree is recursion you can see."
+          : "Recursion is a function that trusts a smaller copy of itself.",
+      clip: null,
+      quiz: questions("chk", 3),
+    }));
+
+    render(<PlayPage />);
+
+    fireEvent.change(screen.getByLabelText("Your topic"), {
+      target: { value: "Backtracking" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start the quest" }));
+    await beginQuest();
+    await screen.findByText("Placement probe · Backtracking");
+
+    answerAll("probe", 6);
+    fireEvent.click(screen.getByRole("button", { name: "Submit placement" }));
+
+    // The DESCEND Battle screen is shown; the fork lookup fires for this
+    // non-goal decision with the session context (Req 14.1).
+    await screen.findByText("You stumble on the base case of recursion.");
+    await waitFor(() =>
+      expect(mockGetPaths).toHaveBeenCalledWith(
+        "Backtracking",
+        "Backtracking",
+        ["Backtracking"],
+        "test-token",
+      ),
+    );
+
+    // With two candidates the fork is active: the hint appears and both
+    // candidate Stages render as selectable buttons on the World_Map.
+    expect(await screen.findByText(/The trail forks/)).toBeInTheDocument();
+    const chosen = await screen.findByRole("button", { name: /Trees basics/ });
+    expect(
+      screen.getByRole("button", { name: /Recursion basics/ }),
+    ).toBeInTheDocument();
+
+    // Selecting a fork advances the loop along the chosen Stage (Req 14.2):
+    // the chosen node is delivered via the normal node-delivery flow.
+    fireEvent.click(chosen);
+    await waitFor(() =>
+      expect(mockDeliver).toHaveBeenCalledWith(
+        "Trees basics",
+        "Backtracking",
+        "test-token",
+      ),
+    );
+    // The chosen node's content renders and the fork hint is gone.
+    expect(
+      await screen.findByText("A tree is recursion you can see."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/The trail forks/)).toBeNull();
+  });
+
+  it("falls back to the single engine-chosen node when no candidates are offered (Req 14.3)", async () => {
+    mockStart.mockResolvedValue({
+      session_id: "s-nofork",
+      goal: "Backtracking",
+      current_node: "Backtracking",
+      probe: questions("probe", 6),
+    });
+    mockDecide.mockResolvedValueOnce(
+      decision({
+        action: "DESCEND",
+        band: "DESCEND",
+        next_node: "Recursion basics",
+        diagnosis: "You stumble on the base case of recursion.",
+        gap: "base case",
+        score_pct: 0.2,
+      }),
+    );
+    // No candidates → no fork; the loop stays on the single-path flow (Req 14.3).
+    mockGetPaths.mockResolvedValue([]);
+    mockDeliver.mockResolvedValue({
+      node: "Recursion basics",
+      hook: "Recursion is a function that trusts a smaller copy of itself.",
+      clip: null,
+      quiz: questions("chk", 3),
+    });
+
+    render(<PlayPage />);
+
+    fireEvent.change(screen.getByLabelText("Your topic"), {
+      target: { value: "Backtracking" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start the quest" }));
+    await beginQuest();
+    await screen.findByText("Placement probe · Backtracking");
+
+    answerAll("probe", 6);
+    fireEvent.click(screen.getByRole("button", { name: "Submit placement" }));
+
+    await screen.findByText("You stumble on the base case of recursion.");
+    // The endpoint was consulted but returned nothing actionable.
+    await waitFor(() => expect(mockGetPaths).toHaveBeenCalled());
+    // No fork hint and no selectable candidate Stage — single-path fallback.
+    expect(screen.queryByText(/The trail forks/)).toBeNull();
+    expect(screen.queryByRole("button", { name: /Trees basics/ })).toBeNull();
+
+    // Continuing from the Battle screen advances to the engine-chosen node.
+    fireEvent.click(screen.getByRole("button", { name: "Retreat & train" }));
+    await waitFor(() =>
+      expect(mockDeliver).toHaveBeenCalledWith(
+        "Recursion basics",
+        "Backtracking",
+        "test-token",
+      ),
+    );
+    expect(
+      await screen.findByText(
+        "Recursion is a function that trusts a smaller copy of itself.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("does not offer a fork when only one candidate is returned (needs two+, Req 14.1)", async () => {
+    mockStart.mockResolvedValue({
+      session_id: "s-onefork",
+      goal: "Backtracking",
+      current_node: "Backtracking",
+      probe: questions("probe", 6),
+    });
+    mockDecide.mockResolvedValueOnce(
+      decision({
+        action: "DESCEND",
+        band: "DESCEND",
+        next_node: "Recursion basics",
+        diagnosis: "You stumble on the base case of recursion.",
+        gap: "base case",
+        score_pct: 0.2,
+      }),
+    );
+    // A single candidate is not a real fork — the learner is never blocked into
+    // a one-option choice; the single-path flow stands (Req 14.1, 14.3).
+    mockGetPaths.mockResolvedValue(["Recursion basics"]);
+    mockDeliver.mockResolvedValue({
+      node: "Recursion basics",
+      hook: "Recursion is a function that trusts a smaller copy of itself.",
+      clip: null,
+      quiz: questions("chk", 3),
+    });
+
+    render(<PlayPage />);
+
+    fireEvent.change(screen.getByLabelText("Your topic"), {
+      target: { value: "Backtracking" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start the quest" }));
+    await beginQuest();
+    await screen.findByText("Placement probe · Backtracking");
+
+    answerAll("probe", 6);
+    fireEvent.click(screen.getByRole("button", { name: "Submit placement" }));
+
+    await screen.findByText("You stumble on the base case of recursion.");
+    await waitFor(() => expect(mockGetPaths).toHaveBeenCalled());
+    // Single candidate → no fork hint; Continue still drives the engine route.
+    expect(screen.queryByText(/The trail forks/)).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Retreat & train" }),
+    ).toBeInTheDocument();
   });
 });

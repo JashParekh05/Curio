@@ -1,0 +1,333 @@
+/*
+ * Pixel Quest retro style system (Req 1.1, 1.2, 1.3, 1.5, 12.1).
+ *
+ * This sheet is the single theming layer for the /play quest. Everything is
+ * namespaced so it never leaks into /feed, /discover, or the rest of the app:
+ *
+ *   - The constrained pixel palette lives as `--pq-*` custom properties scoped
+ *     under the `.pixel-quest` root class (per design "scoped under a
+ *     `.pixel-quest` root class so they never leak into /feed").
+ *   - Utility classes (`.pixelated`, `.crt`, `.pixel-font`, `.pixel-body`) and
+ *     keyframes are `pq-`/namespaced so they don't collide with the brutalist
+ *     globals.
+ *   - All motion keys off `[data-reduced-motion="true"]`, the attribute the
+ *     RetroThemeProvider sets on the route root from `prefers-reduced-motion`
+ *     (Req 1.4, 12.1).
+ *
+ * The pixel typeface is bundled locally (no runtime call to Google Fonts) from
+ * frontend/public/retro/PressStart2P-Regular.woff2 with a system fallback.
+ */
+
+/* ---------------------------------------------------------------------------
+ * Bundled pixel typeface — Press Start 2P (SIL OFL 1.1). `font-display: swap`
+ * paints the system fallback immediately and swaps in the pixel face when
+ * ready, so first paint never blocks (Req 20.3). See FONT-LICENSE.txt.
+ * ------------------------------------------------------------------------- */
+@font-face {
+  font-family: "Press Start 2P";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/retro/PressStart2P-Regular.woff2") format("woff2");
+}
+
+/* ---------------------------------------------------------------------------
+ * Constrained retro palette — scoped to `.pixel-quest` so the tokens exist only
+ * inside the quest subtree and never bleed into other routes. A deliberately
+ * small 70s/80s arcade palette: ink + bg, a handful of accents that double as
+ * the Stage_State tints, plus lightweight biome backdrops.
+ * ------------------------------------------------------------------------- */
+.pixel-quest {
+  /* Core chrome */
+  --pq-ink: #1a1426; /* near-black aubergine for text/borders */
+  --pq-bg: #2b2440; /* deep arcade-cabinet purple backdrop */
+  --pq-panel: #3a3358; /* raised panel/HUD surface */
+  --pq-paper: #f4e8c1; /* parchment for scrolls */
+  --pq-text: #f6f2ff; /* high-contrast light text on dark chrome */
+
+  /* Accents — also drive the Stage_State sprite tints (Property 1) */
+  --pq-gold: #ffce4a; /* MASTERED — slain-monster trophy */
+  --pq-lime: #a8e80c; /* CLEARED — cleared camp/flag */
+  --pq-cyan: #3fc9e0; /* NEXT — live monster lair glow */
+  --pq-orange: #ff7a2f; /* DECAYING — re-spawning ember */
+  --pq-locked: #5b5478; /* LOCKED — fogged/dim tile */
+  --pq-red: #e23b50; /* Dragon / goal keep */
+  --pq-pink: #ff4d8d; /* generic highlight */
+
+  /* Status bar (Knight HUD) */
+  --pq-hp: #e23b50; /* hearts / health */
+  --pq-xp: #3fc9e0; /* XP fill */
+
+  /* Biome backdrops (Phase 1: position-tinted; full Worlds are Phase 2) */
+  --pq-biome-candyland: #ffb3d1;
+  --pq-biome-forest: #4caf6d;
+  --pq-biome-caverns: #4a4063;
+  --pq-biome-sky: #8ec9ff;
+  --pq-biome-keep: #6e2230;
+
+  /* Typefaces — pixel face for chrome, a legible larger face for long body /
+     quiz text so the styling never costs readability (Req 1.5). */
+  --pq-font-pixel: "Press Start 2P", "Courier New", ui-monospace, monospace;
+  --pq-font-body: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    Helvetica, Arial, sans-serif;
+
+  /* Sprite-walk tempo, shared with the Knight walk machinery. */
+  --pq-walk-step-ms: 450ms;
+
+  background: var(--pq-bg);
+  color: var(--pq-text);
+  font-family: var(--pq-font-pixel);
+}
+
+/* ---------------------------------------------------------------------------
+ * Pixelation — keep sprites/tiles crisp at any scale, no smoothing (Req 1.2).
+ * ------------------------------------------------------------------------- */
+.pixelated {
+  image-rendering: pixelated;
+  image-rendering: -moz-crisp-edges;
+  image-rendering: crisp-edges;
+}
+
+/* ---------------------------------------------------------------------------
+ * Typography helpers.
+ *   .pixel-font — chunky pixel chrome (labels, buttons, HUD). Slightly looser
+ *     spacing keeps the blocky glyphs from crowding.
+ *   .pixel-body — long-form quiz/intro text in a legible larger face with
+ *     generous line-height and contrast (Req 1.5, 5/12 legibility).
+ * ------------------------------------------------------------------------- */
+.pixel-font {
+  font-family: var(--pq-font-pixel);
+  line-height: 1.6;
+  letter-spacing: 0.03em;
+  /* Press Start 2P renders large per em — keep chrome readable, not tiny. */
+  font-size: 0.75rem;
+}
+
+.pixel-body {
+  font-family: var(--pq-font-body);
+  font-size: 1.0625rem; /* ~17px — comfortably above the 16px floor */
+  line-height: 1.6;
+  letter-spacing: 0.01em;
+  color: var(--pq-text);
+}
+
+/* ---------------------------------------------------------------------------
+ * CRT / scanline + vignette overlay (Req 1.3, 12.2). Apply `.crt` to the route
+ * root; the RetroThemeProvider toggles it from `crtOn`. The overlay is purely
+ * cosmetic and never intercepts input (`pointer-events: none`).
+ *
+ *   ::before — horizontal scanlines + a faint animated flicker.
+ *   ::after  — corner vignette darkening the cabinet edges.
+ * ------------------------------------------------------------------------- */
+.crt {
+  position: relative;
+}
+
+.crt::before,
+.crt::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  pointer-events: none;
+}
+
+/* Scanlines + subtle flicker. */
+.crt::before {
+  background: repeating-linear-gradient(
+    to bottom,
+    rgba(0, 0, 0, 0) 0,
+    rgba(0, 0, 0, 0) 2px,
+    rgba(0, 0, 0, 0.22) 2px,
+    rgba(0, 0, 0, 0.22) 3px
+  );
+  background-size: 100% 3px;
+  animation: pq-crt-flicker 3s steps(60) infinite;
+}
+
+/* Vignette — darken the four corners like a curved tube. */
+.crt::after {
+  background: radial-gradient(
+    ellipse at center,
+    rgba(0, 0, 0, 0) 55%,
+    rgba(0, 0, 0, 0.45) 100%
+  );
+}
+
+/* ---------------------------------------------------------------------------
+ * Sprite-walk keyframes — stepwise (no tweening), transform/background only so
+ * they stay GPU-friendly and off the main thread (Req 20.2).
+ *
+ *   pq-walk-4  — steps a 4-frame horizontal sprite sheet (background-position).
+ *   pq-walk-bob — a 2-step vertical hop for tile-to-tile travel.
+ *   pq-crt-flicker — the CRT brightness twitch.
+ * Components opt in via these classes and set the sheet via background-image.
+ * ------------------------------------------------------------------------- */
+@keyframes pq-walk-4 {
+  from {
+    background-position-x: 0;
+  }
+  to {
+    /* 4 frames: end one full sheet-width over, steps() snaps each frame. */
+    background-position-x: -400%;
+  }
+}
+
+@keyframes pq-walk-bob {
+  0% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-12.5%);
+  }
+  100% {
+    transform: translateY(0);
+  }
+}
+
+@keyframes pq-crt-flicker {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.94;
+  }
+}
+
+/* Skeleton shimmer — a stepwise light-sweep across placeholder map tiles for
+   the "summoning the realm…" loading beat (Req 10.1, 10.2). Background-position
+   only (no layout), so it stays cheap and off the main thread (Req 20.2/20.3).
+   Components add `.pq-shimmer` to an element that carries a translucent gradient
+   `background-image`; the sweep is hard-disabled under reduced motion below. */
+@keyframes pq-shimmer {
+  from {
+    background-position: 150% 0;
+  }
+  to {
+    background-position: -150% 0;
+  }
+}
+
+/* Battle clash — a brief stepwise screen-shake on a resolved outcome (Req 5,
+   12.1). Transform-only so it stays GPU-friendly; components opt in by adding
+   `.pq-shake` only when motion is allowed, and the reduced-motion rules below
+   hard-disable it as a belt-and-braces fallback. */
+@keyframes pq-shake {
+  0% {
+    transform: translate3d(0, 0, 0);
+  }
+  20% {
+    transform: translate3d(-4px, 2px, 0);
+  }
+  40% {
+    transform: translate3d(4px, -2px, 0);
+  }
+  60% {
+    transform: translate3d(-3px, -1px, 0);
+  }
+  80% {
+    transform: translate3d(3px, 1px, 0);
+  }
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+.pq-shake {
+  animation: pq-shake 360ms steps(5) 1;
+}
+
+/* Cross-World biome transition beat (Req 15.2). A brief stepwise wipe + fade
+   that plays when the Knight crosses from one themed World into the next. The
+   overlay is mounted by WorldMap only while motion is allowed and auto-dismisses
+   after BIOME_TRANSITION_MS; this animation is transform/opacity-only so it
+   stays GPU-friendly (Req 20.2) and is hard-disabled under reduced motion
+   below. */
+@keyframes pq-biome-transition {
+  0% {
+    opacity: 0;
+    transform: translateX(-100%);
+  }
+  20% {
+    opacity: 1;
+    transform: translateX(0);
+  }
+  80% {
+    opacity: 1;
+    transform: translateX(0);
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(100%);
+  }
+}
+
+.pq-biome-transition {
+  animation: pq-biome-transition 900ms steps(8) 1;
+}
+
+/* The walking sprite cycles its sheet in hard steps; tempo follows the shared
+   walk-step token so the CSS and the Knight walk machinery stay in lockstep. */
+.pq-walk {
+  animation: pq-walk-4 var(--pq-walk-step-ms) steps(4) infinite,
+    pq-walk-bob var(--pq-walk-step-ms) steps(2) infinite;
+}
+
+/* Skeleton shimmer sweep — the moving highlight band painted over placeholder
+   tiles. The gradient is the highlight; the sweep animates its position. The
+   element itself stays put so there is no reflow (Req 20.2, 20.3). */
+.pq-shimmer {
+  background-image: linear-gradient(
+    100deg,
+    rgba(246, 242, 255, 0) 35%,
+    rgba(246, 242, 255, 0.22) 50%,
+    rgba(246, 242, 255, 0) 65%
+  );
+  background-size: 250% 100%;
+  background-repeat: no-repeat;
+  animation: pq-shimmer 1.6s steps(24) infinite;
+}
+
+/* ---------------------------------------------------------------------------
+ * Reduced motion (Req 1.4, 12.1). The RetroThemeProvider sets
+ * `data-reduced-motion="true"` on the route root from `prefers-reduced-motion`.
+ * Under it, every pixel-quest animation and transition is hard-disabled and the
+ * sprite snaps to its first/resolved frame — no walk, flicker, shake, or bob.
+ *
+ * A native media-query fallback also fires for any pixel-quest subtree even if
+ * the provider attribute is absent, so reduced motion is honored regardless.
+ * ------------------------------------------------------------------------- */
+[data-reduced-motion="true"] .pixel-quest *,
+[data-reduced-motion="true"].pixel-quest *,
+[data-reduced-motion="true"] .crt::before,
+[data-reduced-motion="true"] .crt::after,
+[data-reduced-motion="true"] .pq-walk,
+[data-reduced-motion="true"] .pq-shimmer,
+[data-reduced-motion="true"] .pq-shake,
+[data-reduced-motion="true"] .pq-biome-transition {
+  animation: none !important;
+  transition: none !important;
+}
+
+/* Snap the walking sprite to its first frame when motion is reduced. */
+[data-reduced-motion="true"] .pq-walk {
+  background-position-x: 0 !important;
+  transform: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pixel-quest *,
+  .crt::before,
+  .crt::after,
+  .pq-walk,
+  .pq-shimmer,
+  .pq-biome-transition {
+    animation: none !important;
+    transition: none !important;
+  }
+  .pq-walk {
+    background-position-x: 0 !important;
+    transform: none !important;
+  }
+}
