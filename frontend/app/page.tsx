@@ -14,13 +14,23 @@ import { Button } from "@/components/pop/Button";
 // (its files remain, just unlinked). Optional interest seeds warm the cold start.
 const INTERESTS = [
   "Coding",
+  "AI",
+  "Math",
+  "Physics",
   "Biology",
-  "History",
+  "Chemistry",
   "Space",
+  "History",
+  "Geography",
+  "Economics",
   "Finance",
   "Psychology",
+  "Philosophy",
+  "Art",
+  "Music",
+  "Writing",
   "Design",
-  "Math",
+  "Health",
 ];
 
 export default function Home() {
