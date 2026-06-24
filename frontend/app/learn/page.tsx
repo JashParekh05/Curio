@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import {
   createLearningPath,
@@ -13,13 +13,15 @@ import { PathRoadmap } from "@/components/pop/PathRoadmap";
 import { Button } from "@/components/pop/Button";
 import { Input } from "@/components/pop/Input";
 
-// Learn mode (Friendly Pop) — the deliberate counterpart to the passive Discover
-// feed. Type a topic -> the LLM builds an ordered path -> tap any step to watch
-// that topic's clips, or start the full guided path (multi-topic + quiz beats).
-// Reuses the existing createLearningPath + PathRoadmap; nothing new on the
-// backend. This is the front door that the passive-first pivot had unlinked.
-export default function LearnPage() {
+// Learn mode (Friendly Pop). Two variants driven by ?mode=:
+//   structured (default) -> /feed?session=...        (path + quiz checkpoints)
+//   basic     (?mode=basic) -> /feed?session=...&quiz=off  (just structured videos)
+// Both build the same LLM path via createLearningPath + PathRoadmap; only the
+// feed destination differs (the feed reads quiz=off to suppress checkpoints).
+function LearnContent() {
   const router = useRouter();
+  const params = useSearchParams();
+  const basic = params.get("mode") === "basic";
   const { user, session, loading } = useAuth();
   const [query, setQuery] = useState("");
   const [building, setBuilding] = useState(false);
@@ -27,8 +29,9 @@ export default function LearnPage() {
   const [path, setPath] = useState<LearningPath | null>(null);
   const [history, setHistory] = useState<LearningPathSummary[]>([]);
 
-  // Recent paths (best-effort; empty for fresh guests). Keyed on the primitive
-  // user id so token refreshes don't refetch — same discipline as the feed.
+  // Append &quiz=off in Basic mode so the feed suppresses quiz checkpoints.
+  const feedUrl = (base: string) => `${base}${basic ? "&quiz=off" : ""}`;
+
   useEffect(() => {
     if (!user || !session) return;
     getUserHistory(user.id, session.access_token).then(setHistory).catch(() => {});
@@ -36,12 +39,12 @@ export default function LearnPage() {
 
   async function build(e: React.FormEvent) {
     e.preventDefault();
-    const q = query.trim();
-    if (!q || building || !user || !session) return;
+    const text = query.trim();
+    if (!text || building || !user || !session) return;
     setBuilding(true);
     setError("");
     try {
-      const p = await createLearningPath(q, user.id, session.access_token);
+      const p = await createLearningPath(text, user.id, session.access_token);
       setPath(p);
     } catch {
       setError("Couldn't build a path for that. Try rephrasing the topic.");
@@ -69,13 +72,13 @@ export default function LearnPage() {
           <>
             <PathRoadmap
               path={path}
-              onPick={(slug) => router.push(`/feed?topic=${encodeURIComponent(slug)}`)}
+              onPick={(slug) => router.push(feedUrl(`/feed?topic=${encodeURIComponent(slug)}`))}
               onReset={() => {
                 setPath(null);
                 setQuery("");
               }}
             />
-            <Button size="lg" onClick={() => router.push(`/feed?session=${path.session_id}`)}>
+            <Button size="lg" onClick={() => router.push(feedUrl(`/feed?session=${path.session_id}`))}>
               Start from the beginning →
             </Button>
           </>
@@ -83,12 +86,22 @@ export default function LearnPage() {
           <>
             {/* Hero */}
             <div className="mt-6">
+              <span
+                className={`inline-block text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-pill mb-2 ${
+                  basic
+                    ? "bg-surface-alt text-on-surface border border-outline"
+                    : "bg-secondary text-on-secondary"
+                }`}
+              >
+                {basic ? "Basic — no quizzes" : "Structured — with quizzes"}
+              </span>
               <h2 className="font-display text-3xl font-extrabold leading-tight">
-                Learn something
+                {basic ? "Basic learn" : "Structured learn"}
               </h2>
               <p className="text-on-surface-muted mt-1.5">
-                Tell us what you want to learn. Curio builds an ordered path and cuts the
-                best clips for each step.
+                {basic
+                  ? "Tell us what you want to learn. We build an ordered path and serve just the best clips — no questions."
+                  : "Tell us what you want to learn. We build an ordered path with quick quiz check-ins along the way."}
               </p>
             </div>
 
@@ -117,7 +130,7 @@ export default function LearnPage() {
                   {history.slice(0, 5).map((h) => (
                     <button
                       key={h.session_id}
-                      onClick={() => router.push(`/feed?session=${h.session_id}`)}
+                      onClick={() => router.push(feedUrl(`/feed?session=${h.session_id}`))}
                       className="text-left bg-surface rounded-card border border-outline shadow-elev-1 px-4 py-3 transition duration-base hover:shadow-elev-2 hover:-translate-y-0.5 motion-reduce:transform-none"
                     >
                       <span className="font-display font-bold text-on-surface block truncate">
@@ -135,5 +148,13 @@ export default function LearnPage() {
         )}
       </div>
     </main>
+  );
+}
+
+export default function LearnPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-canvas" />}>
+      <LearnContent />
+    </Suspense>
   );
 }

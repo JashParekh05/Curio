@@ -97,24 +97,53 @@ export default function Home() {
 
         {/* Hero */}
         <div className="mt-6">
-          <h2 className="font-display text-3xl font-extrabold leading-tight">
-            Your learning feed
-          </h2>
-          <p className="text-on-surface-muted mt-1.5">
-            Scroll short clips on what you&apos;re into — Curio learns what you love as you
-            watch and keeps serving the best.
-          </p>
+          <h2 className="font-display text-3xl font-extrabold leading-tight">What do you want to do?</h2>
+          <p className="text-on-surface-muted mt-1.5">Three ways to learn — pick your mode.</p>
         </div>
 
-        {/* Primary passive action */}
-        <Button size="lg" onClick={() => startFeed()} disabled={seeding}>
-          {seeding ? "Warming up…" : "Start your feed →"}
-        </Button>
+        {/* Three modes */}
+        <div className="flex flex-col gap-3">
+          <button
+            onClick={() => startFeed()}
+            disabled={seeding}
+            className="group text-left bg-surface rounded-card border border-outline shadow-elev-1 px-5 py-4 transition duration-base hover:shadow-elev-2 hover:-translate-y-0.5 disabled:opacity-50 motion-reduce:transform-none"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-display text-lg font-extrabold">Discover</span>
+              <span className="text-[10px] font-bold uppercase tracking-wide bg-primary text-on-primary px-2 py-0.5 rounded-pill">For You</span>
+            </div>
+            <p className="text-on-surface-muted text-sm mt-1">
+              {seeding ? "Warming up…" : "Scroll truly random clips — the feed learns what you love."}
+            </p>
+          </button>
 
-        {/* Optional cold-start seeds */}
+          <button
+            onClick={() => router.push("/learn")}
+            className="group text-left bg-surface rounded-card border border-outline shadow-elev-1 px-5 py-4 transition duration-base hover:shadow-elev-2 hover:-translate-y-0.5 motion-reduce:transform-none"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-display text-lg font-extrabold">Structured Learn</span>
+              <span className="text-[10px] font-bold uppercase tracking-wide bg-secondary text-on-secondary px-2 py-0.5 rounded-pill">Quizzes</span>
+            </div>
+            <p className="text-on-surface-muted text-sm mt-1">Pick a topic → a guided path with quick quiz check-ins.</p>
+          </button>
+
+          <button
+            onClick={() => router.push("/learn?mode=basic")}
+            className="group text-left bg-surface rounded-card border border-outline shadow-elev-1 px-5 py-4 transition duration-base hover:shadow-elev-2 hover:-translate-y-0.5 motion-reduce:transform-none"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-display text-lg font-extrabold">Basic Learn</span>
+              <span className="text-[10px] font-bold uppercase tracking-wide bg-surface-alt text-on-surface border border-outline px-2 py-0.5 rounded-pill">Videos</span>
+            </div>
+            <p className="text-on-surface-muted text-sm mt-1">Pick a topic → just the best clips, structured, no questions.</p>
+          </button>
+        </div>
+
+        {/* Optional cold-start seeds for Discover */}
         <div className="flex flex-col gap-2">
           <p className="text-on-surface-muted text-xs font-semibold uppercase tracking-wide">
-            Into anything specific? (optional)
+            Warm your Discover feed (optional)
           </p>
           <div className="flex flex-wrap gap-2">
             {INTERESTS.map((i) => (
@@ -128,14 +157,6 @@ export default function Home() {
               </button>
             ))}
           </div>
-        </div>
-
-        {/* Secondary mode: deliberate Learn (type a topic -> ordered path -> clips) */}
-        <div className="flex flex-col gap-2 pt-3 mt-1 border-t border-outline">
-          <p className="text-on-surface-muted text-sm">Know exactly what you want to learn?</p>
-          <Button variant="soft" size="lg" onClick={() => router.push("/learn")}>
-            Learn a specific topic →
-          </Button>
         </div>
       </div>
       <LegalFooter />

@@ -23,6 +23,9 @@ function FeedContent() {
   const { user, session, isGuest } = useAuth();
   const sessionId = params.get("session");
   const topicSlug = params.get("topic");
+  // Basic Learn: structured videos with NO quiz checkpoints. When set, every
+  // checkpoint card is suppressed regardless of what the backend returns.
+  const noQuiz = params.get("quiz") === "off";
 
   const startTopicSlug = params.get("start_topic") ?? null;
   const startSection = params.get("start_section") !== null ? parseInt(params.get("start_section")!) : null;
@@ -425,7 +428,9 @@ function FeedContent() {
   // unchanged. Topics with no checkpoints contribute nothing (no regression).
   const checkpointsByGlobalIndex = useMemo(() => {
     const result: Record<number, Checkpoint[]> = {};
-    if (Object.keys(checkpointsByTopic).length === 0) return result;
+    // Basic Learn (quiz=off) suppresses all checkpoints, even if the backend
+    // returned some for these topics.
+    if (noQuiz || Object.keys(checkpointsByTopic).length === 0) return result;
     const topicCounters: Record<string, number> = {};
     clips.forEach((clip, gi) => {
       const slug = topicLabels[clip.id];
@@ -438,7 +443,7 @@ function FeedContent() {
       if (matching.length > 0) result[gi] = matching;
     });
     return result;
-  }, [clips, topicLabels, checkpointsByTopic]);
+  }, [clips, topicLabels, checkpointsByTopic, noQuiz]);
 
   // Resolve a clip's Overlay_Metadata, caching it so revisiting a clip never
   // re-derives or refetches. On a hit the cached value is returned directly (no
@@ -483,18 +488,18 @@ function FeedContent() {
 
   if (initialLoading && clips.length === 0) {
     return (
-      <div className="fixed inset-0 bg-paper flex items-center justify-center">
-        <div className="w-12 h-12 border-[3px] border-ink border-t-accent-pink rounded-full animate-spin" />
+      <div className="fixed inset-0 bg-canvas flex items-center justify-center">
+        <div className="w-12 h-12 border-[3px] border-outline border-t-primary rounded-full animate-spin" />
       </div>
     );
   }
 
   if (!sessionId && !topicSlug) {
     return (
-      <div className="min-h-screen bg-paper text-ink flex items-center justify-center">
+      <div className="min-h-screen bg-canvas text-on-surface flex items-center justify-center">
         <div className="text-center space-y-4">
-          <p className="text-ink font-bold">No topic selected.</p>
-          <button onClick={() => router.push("/")} className="brutal-btn bg-accent-yellow text-ink px-6 py-3">Go back</button>
+          <p className="font-display font-extrabold">No topic selected.</p>
+          <button onClick={() => router.push("/")} className="rounded-pill bg-primary text-on-primary px-6 py-3 text-sm font-semibold shadow-elev-1 transition hover:brightness-[1.03]">Go back</button>
         </div>
       </div>
     );
@@ -503,15 +508,15 @@ function FeedContent() {
   // Network/load error with no clips
   if (loadError && clips.length === 0) {
     return (
-      <div className="fixed inset-0 bg-paper flex flex-col items-center justify-center gap-5 text-ink px-6">
-        <button onClick={() => router.push("/")} className="brutal-btn bg-white text-ink absolute top-4 left-4 text-sm px-3 py-2">
+      <div className="fixed inset-0 bg-canvas flex flex-col items-center justify-center gap-5 text-on-surface px-6">
+        <button onClick={() => router.push("/")} className="rounded-pill bg-surface-alt text-on-surface absolute top-4 left-4 text-sm font-semibold px-4 py-2 shadow-elev-1 transition hover:brightness-95">
           Home
         </button>
-        <p className="text-3xl font-black text-center">Couldn't load clips</p>
-        <p className="text-ink/60 text-sm text-center font-medium">Check that the backend is running.</p>
+        <p className="font-display text-3xl font-extrabold text-center">Couldn't load clips</p>
+        <p className="text-on-surface-muted text-sm text-center">Check that the backend is running.</p>
         <button
           onClick={() => { setLoadError(false); loadFeed(); }}
-          className="brutal-btn bg-accent-yellow text-ink px-6 py-3 text-sm"
+          className="rounded-pill bg-primary text-on-primary px-6 py-3 text-sm font-semibold shadow-elev-1 transition hover:brightness-[1.03]"
         >
           Retry
         </button>
@@ -522,18 +527,18 @@ function FeedContent() {
   // No clips and timed out
   if (timedOut && clips.length === 0) {
     return (
-      <div className="fixed inset-0 bg-paper flex flex-col items-center justify-center gap-5 text-ink px-6">
+      <div className="fixed inset-0 bg-canvas flex flex-col items-center justify-center gap-5 text-on-surface px-6">
         <button
           onClick={() => router.push("/")}
-          className="brutal-btn bg-white text-ink absolute top-4 left-4 text-sm px-3 py-2"
+          className="rounded-pill bg-surface-alt text-on-surface absolute top-4 left-4 text-sm font-semibold px-4 py-2 shadow-elev-1 transition hover:brightness-95"
         >
           Home
         </button>
-        <p className="text-3xl font-black text-center">No clips found</p>
-        <p className="text-ink/60 text-sm text-center font-medium">Try a different topic — we may not have content for this one yet.</p>
+        <p className="font-display text-3xl font-extrabold text-center">No clips found</p>
+        <p className="text-on-surface-muted text-sm text-center">Try a different topic — we may not have content for this one yet.</p>
         <button
           onClick={() => router.push("/")}
-          className="brutal-btn bg-accent-yellow text-ink px-6 py-3 text-sm"
+          className="rounded-pill bg-primary text-on-primary px-6 py-3 text-sm font-semibold shadow-elev-1 transition hover:brightness-[1.03]"
         >
           Try another topic
         </button>
@@ -544,17 +549,17 @@ function FeedContent() {
   // Pure loading (no clips at all yet)
   if (processing && clips.length === 0) {
     return (
-      <div className="fixed inset-0 bg-paper flex flex-col items-center justify-center gap-5 text-ink">
+      <div className="fixed inset-0 bg-canvas flex flex-col items-center justify-center gap-5 text-on-surface">
         <button
           onClick={() => router.push("/")}
-          className="brutal-btn bg-white text-ink absolute top-4 left-4 text-sm px-3 py-2"
+          className="rounded-pill bg-surface-alt text-on-surface absolute top-4 left-4 text-sm font-semibold px-4 py-2 shadow-elev-1 transition hover:brightness-95"
         >
           Home
         </button>
-        <div className="w-12 h-12 border-[3px] border-ink border-t-accent-pink rounded-full animate-spin" />
+        <div className="w-12 h-12 border-[3px] border-outline border-t-primary rounded-full animate-spin" />
         <div className="text-center space-y-1">
-          <p className="text-ink font-extrabold">Finding clips for you</p>
-          <p className="text-ink/60 text-sm font-medium">Hang tight</p>
+          <p className="font-display font-extrabold">Finding clips for you</p>
+          <p className="text-on-surface-muted text-sm">Hang tight</p>
         </div>
       </div>
     );
@@ -562,29 +567,29 @@ function FeedContent() {
 
   return (
     <div className="fixed inset-0 bg-black">
-      {/* HUD */}
+      {/* HUD — glassy chrome over the video */}
       <div className="absolute top-0 inset-x-0 z-20 flex items-center justify-between px-4 pt-4 pb-2 pointer-events-none">
         <button
           onClick={() => router.push("/")}
-          className="pointer-events-auto brutal-dark-btn bg-ink text-white font-bold px-3 py-1.5 text-sm leading-none"
+          className="pointer-events-auto rounded-pill bg-black/40 backdrop-blur-sm text-white font-semibold px-4 py-2 text-sm leading-none transition hover:bg-black/55"
         >
           Home
         </button>
 
         {activeTopicName && (
-          <span className="brutal-dark bg-accent-purple text-white text-xs font-bold tracking-wide px-2 py-1 max-w-[40%] truncate">
+          <span className="rounded-pill bg-black/40 backdrop-blur-sm text-white text-xs font-bold tracking-wide px-3 py-1.5 max-w-[40%] truncate">
             {activeTopicName}
           </span>
         )}
 
         <span className="text-white text-xs tabular-nums flex items-center gap-2 pointer-events-auto">
           {clips.length > 0 ? (
-            <span className="brutal-dark bg-ink px-2 py-1 font-bold">{activeIndex + 1} / {clips.length}</span>
+            <span className="rounded-pill bg-black/40 backdrop-blur-sm px-3 py-1.5 font-semibold">{activeIndex + 1} / {clips.length}</span>
           ) : ""}
           {activeTopicSlug && (
             <button
               onClick={handleShare}
-              className="brutal-dark-btn bg-accent-cyan text-ink font-bold px-3 py-1.5 text-xs leading-none"
+              className="rounded-pill bg-primary text-on-primary font-semibold px-3 py-1.5 text-xs leading-none shadow-elev-1 transition hover:brightness-[1.05]"
             >
               Share
             </button>
@@ -594,7 +599,7 @@ function FeedContent() {
 
       {shareToast && (
         <div className="absolute bottom-8 inset-x-0 z-40 flex justify-center pointer-events-none">
-          <div className="brutal bg-accent-yellow text-ink text-sm font-bold px-4 py-2 shadow-brutal">
+          <div className="rounded-pill bg-on-surface text-canvas text-sm font-semibold px-4 py-2 shadow-elev-2">
             {shareToast}
           </div>
         </div>
@@ -607,26 +612,26 @@ function FeedContent() {
             onClick={() => goTo(activeIndex - 1)}
             disabled={activeIndex === 0}
             aria-label="Previous clip"
-            className="brutal-dark-btn bg-ink w-9 h-9 flex items-center justify-center text-white font-black disabled:opacity-20 disabled:translate-x-0 disabled:translate-y-0 disabled:shadow-brutal-white"
+            className="rounded-pill bg-black/40 backdrop-blur-sm w-10 h-10 flex items-center justify-center text-white text-lg transition hover:bg-black/55 disabled:opacity-20"
           >
-            ^
+            ↑
           </button>
           <button
             onClick={() => goTo(activeIndex + 1)}
             disabled={activeIndex >= clips.length - 1}
             aria-label="Next clip"
-            className="brutal-dark-btn bg-ink w-9 h-9 flex items-center justify-center text-white font-black disabled:opacity-20 disabled:translate-x-0 disabled:translate-y-0 disabled:shadow-brutal-white"
+            className="rounded-pill bg-black/40 backdrop-blur-sm w-10 h-10 flex items-center justify-center text-white text-lg transition hover:bg-black/55 disabled:opacity-20"
           >
-            v
+            ↓
           </button>
         </div>
       )}
 
       {/* Progress bar */}
       {clips.length > 0 && (
-        <div className="absolute top-0 inset-x-0 z-30 h-1 bg-ink">
+        <div className="absolute top-0 inset-x-0 z-30 h-1 bg-white/20">
           <div
-            className="h-full bg-accent-lime transition-all duration-300"
+            className="h-full bg-primary transition-all duration-300"
             style={{ width: `${((activeIndex + 1) / clips.length) * 100}%` }}
           />
         </div>
@@ -686,7 +691,7 @@ function FeedContent() {
                 className="w-full relative snap-start snap-always"
                 style={{ height: "100dvh" }}
               >
-                <div className="absolute inset-0 bg-paper flex items-center justify-center px-4 overflow-y-auto py-10">
+                <div className="absolute inset-0 bg-canvas flex items-center justify-center px-4 overflow-y-auto py-10">
                   <div className="w-full max-w-md">
                     <SoftCheckpointCard
                       topicSlug={cp.topic_slug}
@@ -724,9 +729,9 @@ function FeedContent() {
         {/* End card */}
         {clips.length > 0 && !processing && (
           <div className="snap-start snap-always" style={{ height: "100dvh" }}>
-            <div className="h-full flex flex-col items-center justify-center gap-5 bg-paper text-ink px-6">
-              <p className="text-3xl font-black text-center">You finished this topic.</p>
-              <p className="text-ink/60 text-sm text-center font-medium">
+            <div className="h-full flex flex-col items-center justify-center gap-5 bg-canvas text-on-surface px-6">
+              <p className="font-display text-3xl font-extrabold text-center">You finished this topic.</p>
+              <p className="text-on-surface-muted text-sm text-center">
                 You watched {clips.length} clip{clips.length !== 1 ? "s" : ""}.
               </p>
               {/* Soft remediation: a gentle "rewatch these clips" nudge for the
@@ -734,8 +739,8 @@ function FeedContent() {
                   just scrolls back to it; it never blocks moving on. */}
               {rewatchClips.length > 0 && (
                 <div className="w-full max-w-sm space-y-2">
-                  <p className="text-ink text-xs font-black uppercase tracking-wide">Rewatch these clips</p>
-                  <p className="text-ink/60 text-xs font-medium">
+                  <p className="text-on-surface text-xs font-bold uppercase tracking-wide">Rewatch these clips</p>
+                  <p className="text-on-surface-muted text-xs">
                     A quick refresher on what tripped you up — totally optional.
                   </p>
                   {rewatchClips.map((rc) => {
@@ -745,20 +750,20 @@ function FeedContent() {
                         key={rc.clip_id}
                         onClick={() => { if (idx >= 0) goTo(idx); }}
                         disabled={idx < 0}
-                        className="brutal-btn w-full text-left bg-accent-pink text-ink px-4 py-3 flex items-center gap-3 disabled:opacity-40 disabled:translate-x-0 disabled:translate-y-0"
+                        className="w-full text-left bg-surface rounded-card border border-outline shadow-elev-1 px-4 py-3 flex items-center gap-3 transition hover:shadow-elev-2 disabled:opacity-40"
                       >
                         {rc.thumbnail_url && (
                           // eslint-disable-next-line @next/next/no-img-element
                           <img
                             src={rc.thumbnail_url}
                             alt=""
-                            className="w-12 h-12 object-cover border-2 border-ink shrink-0"
+                            className="w-12 h-12 object-cover rounded-control shrink-0"
                           />
                         )}
-                        <p className="font-bold text-sm flex-1 min-w-0 truncate">
+                        <p className="font-semibold text-sm flex-1 min-w-0 truncate">
                           {rc.title ?? "Rewatch clip"}
                         </p>
-                        <span className="text-ink font-black text-sm shrink-0">{">"}</span>
+                        <span className="text-on-surface-muted font-bold text-sm shrink-0">{">"}</span>
                       </button>
                     );
                   })}
@@ -766,16 +771,16 @@ function FeedContent() {
               )}
               {recommendations.length > 0 ? (
                 <>
-                  <p className="text-ink text-xs font-black uppercase tracking-wide">What to learn next</p>
+                  <p className="text-on-surface text-xs font-bold uppercase tracking-wide">What to learn next</p>
                   <div className="w-full max-w-sm space-y-3">
-                    {recommendations.map((rec, ri) => (
+                    {recommendations.map((rec) => (
                       <button
                         key={rec.slug}
                         onClick={() => router.push(`/feed?topic=${rec.slug}`)}
-                        className={`brutal-btn w-full text-left ${["bg-accent-yellow","bg-accent-cyan","bg-accent-lime","bg-accent-pink"][ri % 4]} text-ink px-4 py-3`}
+                        className="w-full text-left bg-surface rounded-card border border-outline shadow-elev-1 px-4 py-3 transition hover:shadow-elev-2 hover:-translate-y-0.5 motion-reduce:transform-none"
                       >
-                        <p className="font-bold text-sm">{rec.name}</p>
-                        <p className="text-ink/60 text-xs mt-0.5 font-medium">{rec.clip_count} clips · {rec.difficulty}</p>
+                        <p className="font-display font-bold text-sm">{rec.name}</p>
+                        <p className="text-on-surface-muted text-xs mt-0.5">{rec.clip_count} clips · {rec.difficulty}</p>
                       </button>
                     ))}
                   </div>
@@ -783,7 +788,7 @@ function FeedContent() {
               ) : (
                 <button
                   onClick={() => router.push("/")}
-                  className="brutal-btn bg-accent-yellow text-ink px-6 py-3 text-sm"
+                  className="rounded-pill bg-primary text-on-primary px-6 py-3 text-sm font-semibold shadow-elev-1 transition hover:brightness-[1.03]"
                 >
                   Learn something new
                 </button>
@@ -795,9 +800,9 @@ function FeedContent() {
         {/* Still loading more */}
         {clips.length > 0 && processing && (
           <div className="snap-start snap-always" style={{ height: "100dvh" }}>
-            <div className="h-full flex flex-col items-center justify-center gap-4 bg-paper text-ink">
-              <div className="w-8 h-8 border-[3px] border-ink border-t-accent-pink rounded-full animate-spin" />
-              <p className="text-ink/60 text-sm font-bold">Loading more clips</p>
+            <div className="h-full flex flex-col items-center justify-center gap-4 bg-canvas text-on-surface">
+              <div className="w-8 h-8 border-[3px] border-outline border-t-primary rounded-full animate-spin" />
+              <p className="text-on-surface-muted text-sm font-medium">Loading more clips</p>
             </div>
           </div>
         )}
@@ -810,8 +815,8 @@ export default function FeedPage() {
   return (
     <Suspense
       fallback={
-        <div className="fixed inset-0 bg-paper flex items-center justify-center">
-          <div className="w-12 h-12 border-[3px] border-ink border-t-accent-pink rounded-full animate-spin" />
+        <div className="fixed inset-0 bg-canvas flex items-center justify-center">
+          <div className="w-12 h-12 border-[3px] border-outline border-t-primary rounded-full animate-spin" />
         </div>
       }
     >
