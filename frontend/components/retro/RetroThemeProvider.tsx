@@ -56,10 +56,11 @@ export interface RetroThemeValue {
 }
 
 // Sensible defaults so `useRetroSettings()` is safe even outside a provider
-// (mirrors the auth-context default-value pattern): CRT on for the arcade look,
-// audio muted by default, motion enabled, toggles are no-ops.
+// (mirrors the auth-context default-value pattern): CRT overlay OFF by default
+// (the scanline/vignette overlay washed out the whole page — it's now opt-in via
+// the toggle), audio muted by default, motion enabled, toggles are no-ops.
 const DEFAULT_VALUE: RetroThemeValue = {
-  crtOn: true,
+  crtOn: false,
   audioOn: false,
   reducedMotion: false,
   toggleCrt: () => {},

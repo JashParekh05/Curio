@@ -3,68 +3,96 @@
 exports[`QuizQuestionList brutalist option states (preserved verbatim) > renders identical markup for a graded quiz (snapshot) 1`] = `
 <div>
   <div
-    class="space-y-3"
+    class="space-y-4"
   >
     <div
-      class="space-y-1.5"
+      class="brutal-card p-4 space-y-3"
     >
+      <div
+        class="flex items-start gap-2"
+      >
+        <span
+          class="brutal bg-accent-purple text-white text-[10px] font-black leading-none px-1.5 py-1 shrink-0"
+        >
+          Q
+          1
+        </span>
+        <p
+          class="text-ink text-sm font-bold leading-snug"
+        >
+          What is 2 + 2?
+        </p>
+      </div>
+      <div
+        class="space-y-2.5"
+      >
+        <button
+          class="w-full text-left text-xs leading-relaxed px-3.5 py-3 border-2 rounded-none font-medium transition-all duration-75 border-ink bg-accent-lime text-ink font-bold"
+          disabled=""
+        >
+          4
+        </button>
+        <button
+          class="w-full text-left text-xs leading-relaxed px-3.5 py-3 border-2 rounded-none font-medium transition-all duration-75 border-ink bg-accent-pink text-white font-bold"
+          disabled=""
+        >
+          5
+        </button>
+        <button
+          class="w-full text-left text-xs leading-relaxed px-3.5 py-3 border-2 rounded-none font-medium transition-all duration-75 border-ink/30 bg-white/40 text-ink/40"
+          disabled=""
+        >
+          22
+        </button>
+      </div>
       <p
-        class="text-ink text-xs font-bold"
-      >
-        What is 2 + 2?
-      </p>
-      <button
-        class="w-full text-left text-xs px-3 py-2 border-2 rounded-none font-medium transition-all duration-75 border-ink bg-accent-lime text-ink font-bold"
-        disabled=""
-      >
-        4
-      </button>
-      <button
-        class="w-full text-left text-xs px-3 py-2 border-2 rounded-none font-medium transition-all duration-75 border-ink bg-accent-pink text-white font-bold"
-        disabled=""
-      >
-        5
-      </button>
-      <button
-        class="w-full text-left text-xs px-3 py-2 border-2 rounded-none font-medium transition-all duration-75 border-ink/30 bg-white/40 text-ink/40"
-        disabled=""
-      >
-        22
-      </button>
-      <p
-        class="brutal bg-white text-ink text-[11px] font-medium px-2 py-1.5 mt-1"
+        class="brutal bg-paper text-ink text-[11px] font-medium leading-relaxed px-2.5 py-2"
       >
         Two plus two is four.
       </p>
     </div>
     <div
-      class="space-y-1.5"
+      class="brutal-card p-4 space-y-3"
     >
+      <div
+        class="flex items-start gap-2"
+      >
+        <span
+          class="brutal bg-accent-purple text-white text-[10px] font-black leading-none px-1.5 py-1 shrink-0"
+        >
+          Q
+          2
+        </span>
+        <p
+          class="text-ink text-sm font-bold leading-snug"
+        >
+          Capital of France?
+        </p>
+      </div>
+      <div
+        class="space-y-2.5"
+      >
+        <button
+          class="w-full text-left text-xs leading-relaxed px-3.5 py-3 border-2 rounded-none font-medium transition-all duration-75 border-ink bg-accent-lime text-ink font-bold"
+          disabled=""
+        >
+          Paris
+        </button>
+        <button
+          class="w-full text-left text-xs leading-relaxed px-3.5 py-3 border-2 rounded-none font-medium transition-all duration-75 border-ink/30 bg-white/40 text-ink/40"
+          disabled=""
+        >
+          Rome
+        </button>
+        <button
+          class="w-full text-left text-xs leading-relaxed px-3.5 py-3 border-2 rounded-none font-medium transition-all duration-75 border-ink/30 bg-white/40 text-ink/40"
+          disabled=""
+        >
+          Berlin
+        </button>
+      </div>
       <p
-        class="text-ink text-xs font-bold"
-      >
-        Capital of France?
-      </p>
-      <button
-        class="w-full text-left text-xs px-3 py-2 border-2 rounded-none font-medium transition-all duration-75 border-ink bg-accent-lime text-ink font-bold"
-        disabled=""
-      >
-        Paris
-      </button>
-      <button
-        class="w-full text-left text-xs px-3 py-2 border-2 rounded-none font-medium transition-all duration-75 border-ink/30 bg-white/40 text-ink/40"
-        disabled=""
-      >
-        Rome
-      </button>
-      <button
-        class="w-full text-left text-xs px-3 py-2 border-2 rounded-none font-medium transition-all duration-75 border-ink/30 bg-white/40 text-ink/40"
-        disabled=""
-      >
-        Berlin
-      </button>
-      <p
-        class="brutal bg-white text-ink text-[11px] font-medium px-2 py-1.5 mt-1"
+        class="brutal bg-paper text-ink text-[11px] font-medium leading-relaxed px-2.5 py-2"
       >
         Paris is the capital of France.
       </p>

@@ -48,24 +48,32 @@ export function QuizQuestionList({
   onAnswer: (q: QuizQuestion, choiceIndex: number) => void;
 }) {
   return (
-    <div className="space-y-3">
-      {questions.map((q) => {
+    <div className="space-y-4">
+      {questions.map((q, qi) => {
         const a = answers[q.id];
         return (
-          <div key={q.id} className="space-y-1.5">
-            <p className="text-ink text-xs font-bold">{q.question}</p>
-            {q.options.map((opt, oi) => (
-              <button
-                key={oi}
-                disabled={!!a}
-                onClick={() => onAnswer(q, oi)}
-                className={`w-full text-left text-xs px-3 py-2 border-2 rounded-none font-medium transition-all duration-75 ${optionClass(q, oi, answers)}`}
-              >
-                {opt}
-              </button>
-            ))}
+          <div key={q.id} className="brutal-card p-4 space-y-3">
+            {/* Flashcard prompt with a question-number tab for clear hierarchy. */}
+            <div className="flex items-start gap-2">
+              <span className="brutal bg-accent-purple text-white text-[10px] font-black leading-none px-1.5 py-1 shrink-0">
+                Q{qi + 1}
+              </span>
+              <p className="text-ink text-sm font-bold leading-snug">{q.question}</p>
+            </div>
+            <div className="space-y-2.5">
+              {q.options.map((opt, oi) => (
+                <button
+                  key={oi}
+                  disabled={!!a}
+                  onClick={() => onAnswer(q, oi)}
+                  className={`w-full text-left text-xs leading-relaxed px-3.5 py-3 border-2 rounded-none font-medium transition-all duration-75 ${optionClass(q, oi, answers)}`}
+                >
+                  {opt}
+                </button>
+              ))}
+            </div>
             {a && (
-              <p className="brutal bg-white text-ink text-[11px] font-medium px-2 py-1.5 mt-1">
+              <p className="brutal bg-paper text-ink text-[11px] font-medium leading-relaxed px-2.5 py-2">
                 {q.explanation}
               </p>
             )}

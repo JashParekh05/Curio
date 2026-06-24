@@ -108,6 +108,7 @@ export default function IntuitionScroll({
         <p
           className="pixel-body"
           style={{
+            color: "var(--pq-ink)",
             fontWeight: 700,
             lineHeight: 1.5,
             margin: 0,
@@ -120,6 +121,7 @@ export default function IntuitionScroll({
         <p
           className="pixel-body"
           style={{
+            color: "var(--pq-ink)",
             fontStyle: "italic",
             opacity: 0.55,
             margin: 0,
