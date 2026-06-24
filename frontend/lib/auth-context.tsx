@@ -16,6 +16,8 @@ interface AuthContextValue {
   signOut: () => Promise<void>;
   /** Convert the current anonymous guest into a permanent account in place. */
   upgradeAccount: (email: string, password: string) => Promise<{ error: string | null }>;
+  /** Sign in to an existing account (switches identity; guest progress not merged). */
+  signIn: (email: string, password: string) => Promise<{ error: string | null }>;
 }
 
 const AuthContext = createContext<AuthContextValue>({
@@ -26,6 +28,7 @@ const AuthContext = createContext<AuthContextValue>({
   isAuthenticated: false,
   signOut: async () => {},
   upgradeAccount: async () => ({ error: null }),
+  signIn: async () => ({ error: null }),
 });
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -94,8 +97,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return { error: null };
   }
 
+  async function signIn(email: string, password: string): Promise<{ error: string | null }> {
+    // Sign in to an EXISTING account. Unlike upgradeAccount this switches the
+    // session to that account's user_id (the guest's progress is not merged).
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) return { error: error.message };
+    const { data } = await supabase.auth.getSession();
+    if (data.session) setSession(data.session);
+    resetGuestProgress();
+    return { error: null };
+  }
+
   return (
-    <AuthContext.Provider value={{ user, session, loading, isGuest, isAuthenticated, signOut, upgradeAccount }}>
+    <AuthContext.Provider value={{ user, session, loading, isGuest, isAuthenticated, signOut, upgradeAccount, signIn }}>
       {children}
     </AuthContext.Provider>
   );

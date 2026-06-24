@@ -11,6 +11,7 @@ import {
   GUEST_CLIP_EVENT,
 } from "@/lib/guest-progress";
 import UpgradeModal from "./UpgradeModal";
+import { Button } from "@/components/pop/Button";
 
 // Non-blocking soft signup gate + hard wall. Mounted once at the app root so it
 // covers every screen. After a few clips a guest sees a dismissible nudge banner;
@@ -48,26 +49,23 @@ export default function GuestGate() {
     <>
       {showBanner && (
         <div className="fixed bottom-4 inset-x-4 z-40 flex justify-center pointer-events-none">
-          <div className="pointer-events-auto brutal flex items-center gap-3 bg-accent-yellow text-ink px-4 py-3 shadow-brutal max-w-sm w-full">
+          <div className="pointer-events-auto flex items-center gap-3 bg-surface text-on-surface rounded-xl2 px-4 py-3 shadow-elev-3 max-w-sm w-full">
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-black">Save your progress</p>
-              <p className="text-xs text-ink/70 font-medium">Create a free account to keep your history.</p>
+              <p className="text-sm font-display font-extrabold">Save your progress</p>
+              <p className="text-xs text-on-surface-muted font-medium">Create a free account to keep your history.</p>
             </div>
-            <button
-              onClick={() => setModalOpen(true)}
-              className="brutal-btn bg-ink text-white text-sm px-3 py-2 shadow-brutal-sm shrink-0"
-            >
+            <Button size="sm" onClick={() => setModalOpen(true)} className="shrink-0">
               Sign up
-            </button>
+            </Button>
             <button
               onClick={() => {
                 dismissGate();
                 setShow(false);
               }}
               aria-label="Dismiss"
-              className="text-ink/60 hover:text-ink text-lg font-black leading-none shrink-0"
+              className="text-on-surface-muted hover:text-on-surface text-lg leading-none shrink-0 px-1"
             >
-              X
+              ✕
             </button>
           </div>
         </div>
