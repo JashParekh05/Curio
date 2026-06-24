@@ -35,12 +35,17 @@ export default function DiscoverPage() {
   sessionTokenRef.current = session?.access_token ?? "";
   isGuestRef.current = isGuest;
 
+  // Load the feed exactly ONCE per signed-in user. Keyed on the primitive
+  // user id (not the session/user objects) and guarded by a ref, so Supabase
+  // re-emitting auth events (tab focus, token refresh) can never re-run this
+  // and swap the clips array out from under an in-progress scroll.
+  const feedLoadedForRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!user || !session) return;
-    const token = session.access_token;
+    if (!user || feedLoadedForRef.current === user.id) return;
+    feedLoadedForRef.current = user.id;
 
     function doFetch() {
-      getDiscoverFeed(user!.id, token).then(({ clips: c, processing }) => {
+      getDiscoverFeed(user!.id, sessionTokenRef.current).then(({ clips: c, processing }) => {
         const fresh = c.filter((clip) => !seenClipIdsRef.current.has(clip.id));
         fresh.forEach((clip) => seenClipIdsRef.current.add(clip.id));
         if (fresh.length > 0) {
@@ -76,7 +81,7 @@ export default function DiscoverPage() {
       clearInterval(pollRef.current);
       clearTimeout(coldStartTimeoutRef.current);
     };
-  }, [user, session]);
+  }, [user?.id]);
 
   const goTo = useCallback((idx: number) => {
     const clamped = Math.max(0, Math.min(clipsRef.current.length - 1, idx));
@@ -148,17 +153,17 @@ export default function DiscoverPage() {
 
   // Auto-load more when 2 from the end
   useEffect(() => {
-    if (!user || !session || clips.length === 0 || activeIndex < clips.length - 2) return;
+    if (!user || clips.length === 0 || activeIndex < clips.length - 2) return;
     if (fetchingMoreRef.current) return;
     fetchingMoreRef.current = true;
-    getDiscoverFeed(user.id, session.access_token)
+    getDiscoverFeed(user.id, sessionTokenRef.current)
       .then((more) => {
         const fresh = more.clips.filter((clip) => !seenClipIdsRef.current.has(clip.id));
         fresh.forEach((clip) => seenClipIdsRef.current.add(clip.id));
         setClips((prev) => [...prev, ...fresh]);
       })
       .finally(() => { fetchingMoreRef.current = false; });
-  }, [activeIndex, clips.length, user, session]);
+  }, [activeIndex, clips.length, user?.id]);
 
   // Stable IntersectionObserver — created once, re-observes new clips as count grows
   const observerRef = useRef<IntersectionObserver | null>(null);
