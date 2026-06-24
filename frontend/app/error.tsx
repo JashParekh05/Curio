@@ -2,11 +2,11 @@
 
 export default function GlobalError({ reset }: { error: Error; reset: () => void }) {
   return (
-    <div className="fixed inset-0 bg-paper flex flex-col items-center justify-center gap-5 text-ink px-6">
-      <p className="text-3xl font-black">Something went wrong</p>
+    <div className="fixed inset-0 bg-canvas flex flex-col items-center justify-center gap-5 text-on-surface px-6">
+      <p className="font-display text-3xl font-extrabold">Something went wrong</p>
       <button
         onClick={reset}
-        className="brutal-btn bg-accent-yellow text-ink text-sm px-6 py-3"
+        className="rounded-pill bg-primary text-on-primary text-sm font-semibold px-6 py-3 shadow-elev-1 transition hover:brightness-[1.03]"
       >
         Try again
       </button>

@@ -22,8 +22,8 @@ export default function AuthCallback() {
   }, [router]);
 
   return (
-    <div className="fixed inset-0 bg-paper flex items-center justify-center">
-      <div className="w-10 h-10 border-[3px] border-ink border-t-accent-pink rounded-full animate-spin" />
+    <div className="fixed inset-0 bg-canvas flex items-center justify-center">
+      <div className="w-10 h-10 border-[3px] border-outline border-t-primary rounded-full animate-spin" />
     </div>
   );
 }

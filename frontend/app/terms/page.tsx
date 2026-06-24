@@ -6,7 +6,7 @@ export const metadata: Metadata = {
   description: "The terms governing your use of Curio.",
 };
 
-// Generated starting draft — review with counsel before relying on it. Update
+// Generated starting draft, review with counsel before relying on it. Update
 // the entity name, contact addresses, and governing-law section to match your
 // real business details and jurisdiction.
 export default function TermsPage() {
@@ -39,8 +39,8 @@ export default function TermsPage() {
           into topic-based feeds. Videos play through embedded players provided
           by third-party platforms (such as YouTube). Curio does not host,
           store, download, or rebroadcast the underlying video or audio media.
-          We store only references to publicly available content — a source link
-          plus start and end timestamps — together with metadata we derive to
+          We store only references to publicly available content, a source link
+          plus start and end timestamps, together with metadata we derive to
           organize and rank the feed. We may add, change, or remove features at
           any time.
         </p>
@@ -87,8 +87,8 @@ export default function TermsPage() {
 
       <LegalSection heading="5. Intellectual property">
         <p>
-          The Service itself — including its software, design, branding, and the
-          organization and presentation of content — is owned by Curio and
+          The Service itself, including its software, design, branding, and the
+          organization and presentation of content, is owned by Curio and
           protected by intellectual property laws. We grant you a limited,
           non-exclusive, non-transferable, revocable license to use the Service
           for your personal, non-commercial learning. All rights in third-party

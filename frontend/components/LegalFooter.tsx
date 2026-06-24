@@ -8,16 +8,16 @@ import Link from "next/link";
 export default function LegalFooter() {
   return (
     <footer className="w-full max-w-xl mx-auto pt-8 pb-2">
-      <div className="flex items-center justify-center gap-4 text-ink/40 text-xs font-bold">
-        <Link href="/terms" className="hover:text-ink transition">
+      <div className="flex items-center justify-center gap-4 text-on-surface-muted text-xs font-semibold">
+        <Link href="/terms" className="hover:text-on-surface transition">
           Terms
         </Link>
         <span aria-hidden>·</span>
-        <Link href="/privacy" className="hover:text-ink transition">
+        <Link href="/privacy" className="hover:text-on-surface transition">
           Privacy
         </Link>
         <span aria-hidden>·</span>
-        <Link href="/content-policy" className="hover:text-ink transition">
+        <Link href="/content-policy" className="hover:text-on-surface transition">
           Content Policy
         </Link>
       </div>
