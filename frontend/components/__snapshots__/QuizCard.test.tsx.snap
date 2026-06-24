@@ -1,24 +1,24 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`QuizQuestionList brutalist option states (preserved verbatim) > renders identical markup for a graded quiz (snapshot) 1`] = `
+exports[`QuizQuestionList option states (Friendly Pop) > renders identical markup for a graded quiz (snapshot) 1`] = `
 <div>
   <div
     class="space-y-4"
   >
     <div
-      class="brutal-card p-4 space-y-3"
+      class="bg-surface rounded-card border border-outline shadow-elev-1 p-4 space-y-3"
     >
       <div
         class="flex items-start gap-2"
       >
         <span
-          class="brutal bg-accent-purple text-white text-[10px] font-black leading-none px-1.5 py-1 shrink-0"
+          class="rounded-pill bg-primary text-on-primary text-[10px] font-bold leading-none px-2 py-1 shrink-0"
         >
           Q
           1
         </span>
         <p
-          class="text-ink text-sm font-bold leading-snug"
+          class="text-on-surface text-sm font-semibold leading-snug"
         >
           What is 2 + 2?
         </p>
@@ -27,44 +27,44 @@ exports[`QuizQuestionList brutalist option states (preserved verbatim) > renders
         class="space-y-2.5"
       >
         <button
-          class="w-full text-left text-xs leading-relaxed px-3.5 py-3 border-2 rounded-none font-medium transition-all duration-75 border-ink bg-accent-lime text-ink font-bold"
+          class="w-full text-left text-xs leading-relaxed px-3.5 py-3 border rounded-control font-medium transition-all duration-75 border-success bg-success text-white font-semibold"
           disabled=""
         >
           4
         </button>
         <button
-          class="w-full text-left text-xs leading-relaxed px-3.5 py-3 border-2 rounded-none font-medium transition-all duration-75 border-ink bg-accent-pink text-white font-bold"
+          class="w-full text-left text-xs leading-relaxed px-3.5 py-3 border rounded-control font-medium transition-all duration-75 border-danger bg-danger text-white font-semibold"
           disabled=""
         >
           5
         </button>
         <button
-          class="w-full text-left text-xs leading-relaxed px-3.5 py-3 border-2 rounded-none font-medium transition-all duration-75 border-ink/30 bg-white/40 text-ink/40"
+          class="w-full text-left text-xs leading-relaxed px-3.5 py-3 border rounded-control font-medium transition-all duration-75 border-outline bg-surface text-on-surface-muted opacity-60"
           disabled=""
         >
           22
         </button>
       </div>
       <p
-        class="brutal bg-paper text-ink text-[11px] font-medium leading-relaxed px-2.5 py-2"
+        class="bg-surface-alt rounded-control text-on-surface text-[11px] font-medium leading-relaxed px-2.5 py-2"
       >
         Two plus two is four.
       </p>
     </div>
     <div
-      class="brutal-card p-4 space-y-3"
+      class="bg-surface rounded-card border border-outline shadow-elev-1 p-4 space-y-3"
     >
       <div
         class="flex items-start gap-2"
       >
         <span
-          class="brutal bg-accent-purple text-white text-[10px] font-black leading-none px-1.5 py-1 shrink-0"
+          class="rounded-pill bg-primary text-on-primary text-[10px] font-bold leading-none px-2 py-1 shrink-0"
         >
           Q
           2
         </span>
         <p
-          class="text-ink text-sm font-bold leading-snug"
+          class="text-on-surface text-sm font-semibold leading-snug"
         >
           Capital of France?
         </p>
@@ -73,26 +73,26 @@ exports[`QuizQuestionList brutalist option states (preserved verbatim) > renders
         class="space-y-2.5"
       >
         <button
-          class="w-full text-left text-xs leading-relaxed px-3.5 py-3 border-2 rounded-none font-medium transition-all duration-75 border-ink bg-accent-lime text-ink font-bold"
+          class="w-full text-left text-xs leading-relaxed px-3.5 py-3 border rounded-control font-medium transition-all duration-75 border-success bg-success text-white font-semibold"
           disabled=""
         >
           Paris
         </button>
         <button
-          class="w-full text-left text-xs leading-relaxed px-3.5 py-3 border-2 rounded-none font-medium transition-all duration-75 border-ink/30 bg-white/40 text-ink/40"
+          class="w-full text-left text-xs leading-relaxed px-3.5 py-3 border rounded-control font-medium transition-all duration-75 border-outline bg-surface text-on-surface-muted opacity-60"
           disabled=""
         >
           Rome
         </button>
         <button
-          class="w-full text-left text-xs leading-relaxed px-3.5 py-3 border-2 rounded-none font-medium transition-all duration-75 border-ink/30 bg-white/40 text-ink/40"
+          class="w-full text-left text-xs leading-relaxed px-3.5 py-3 border rounded-control font-medium transition-all duration-75 border-outline bg-surface text-on-surface-muted opacity-60"
           disabled=""
         >
           Berlin
         </button>
       </div>
       <p
-        class="brutal bg-paper text-ink text-[11px] font-medium leading-relaxed px-2.5 py-2"
+        class="bg-surface-alt rounded-control text-on-surface text-[11px] font-medium leading-relaxed px-2.5 py-2"
       >
         Paris is the capital of France.
       </p>
