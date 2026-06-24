@@ -1,6 +1,7 @@
 """Discover cold-start: grade/interest → starter topic slugs, interest matching,
 and background seeding of interest-aligned topics."""
 import re
+import random
 import logging
 
 from app.db.supabase import get_client
@@ -175,3 +176,63 @@ def _seed_topics_bg(slugs: list[str], difficulty: str) -> None:
                 logger.info(f"[feed] seeded pipeline for interest topic={slug}")
         except Exception as exc:
             logger.warning(f"[feed] Failed to seed pipeline for {slug}: {exc}")
+
+
+# --------------------------------------------------------------------------- #
+# Signal-driven fresh top-up: generate NEW clips for the user's top taste topics
+# --------------------------------------------------------------------------- #
+
+# Rotated search angles. Appending one to a topic name makes the YouTube search
+# a CACHE MISS (a new query string) so it surfaces fresh videos instead of the
+# already-cached set — the core of "feels fresh" without yt-dlp.
+_FRESH_ANGLES = ["explained", "examples", "intuition", "deep dive", "in practice", "key ideas"]
+
+
+def select_topup_topics(
+    relevant_slugs: list[str],
+    interest_vector: dict[str, float] | None = None,
+    max_topics: int = 2,
+) -> list[str]:
+    """Signal-driven choice of which topics to generate FRESH clips for.
+
+    ``relevant_slugs`` arrives already ranked by the live taste vector (most
+    liked first). Walk that order, skip any topic the user has strongly signaled
+    they already know / don't want (``interest_vector[slug] <= -0.5``), and cap
+    at ``max_topics`` so each request schedules only a bounded amount of
+    generation. Pure + deterministic (unit-testable); re-targets automatically
+    as signals move the taste vector and the interest scores.
+    """
+    iv = interest_vector or {}
+    out: list[str] = []
+    for slug in relevant_slugs:
+        if iv.get(slug, 0.0) <= -0.5:  # strong "already know" / dislike -> skip
+            continue
+        out.append(slug)
+        if len(out) >= max_topics:
+            break
+    return out
+
+
+def _topup_discover_fresh(slugs: list[str], difficulty: str) -> None:
+    """Background: pull FRESH clips for taste-selected topics via a rotated
+    search angle (cache MISS -> new videos) and ADD them (clear_existing=False).
+
+    Rides the existing fail-closed multi-project quota pool, so it fails over
+    across YT_PROJECTS keys and stops cleanly when the day's budget is spent.
+    Best-effort: a per-topic failure never affects the others or the request.
+    """
+    from app.agents.pipeline_agent import run_pipeline
+    for slug in slugs:
+        name = slug.replace("-", " ").title()
+        angle = random.choice(_FRESH_ANGLES)
+        try:
+            stored = run_pipeline(
+                slug,
+                name,
+                search_query=f"{name} {angle}",
+                section_index=0,
+                clear_existing=False,
+            )
+            logger.info(f"[feed] fresh top-up topic={slug} angle={angle!r} stored={stored}")
+        except Exception as exc:
+            logger.warning(f"[feed] fresh top-up failed for {slug}: {exc}")

@@ -31,6 +31,8 @@ from app.services.discover_seeding import (
     _interest_seed_slugs,
     _match_interest_slugs,
     _seed_topics_bg,
+    select_topup_topics,
+    _topup_discover_fresh,
     _GRADE_DIFFICULTY,
 )
 from app.services.path_extension import _should_extend, _extend_path, _LOW_CLIPS_THRESHOLD
@@ -686,6 +688,18 @@ async def get_discover_feed(user_id: str, background_tasks: BackgroundTasks, lim
     relevant_slugs = _match_interest_slugs(interests, candidate_slugs, taste_vector=taste_vector)
 
     clips = _fetch_discover_clips(db, relevant_slugs, candidate_slugs, seen_ids, limit, interest_vector=user_interest_vector, taste_vector=taste_vector)
+
+    # Signal-driven fresh generation (rides the fail-closed multi-project quota
+    # pool): top up the user's top taste-ranked topics with NEW clips from fresh
+    # searches, so Discover keeps feeling fresh instead of recycling the library.
+    # Gated on interests (like the seed top-up) so we never spend quota without a
+    # signal; WHICH topics is taste-ranked, re-targeting as the vectors move.
+    if interests:
+        topup_slugs = select_topup_topics(relevant_slugs, user_interest_vector)
+        if topup_slugs:
+            background_tasks.add_task(
+                _topup_discover_fresh, topup_slugs, _GRADE_DIFFICULTY.get(grade_level, "intermediate")
+            )
 
     # Level-aware ranking (stage 2): the user's exact Content_Level leads, with
     # below-level clips dropped while a match exists. rank_by_level is a stable
