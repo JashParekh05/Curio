@@ -1241,6 +1241,109 @@ def decide(req: DecideRequest) -> DecideResponse:
     )
 
 
+# Default number of branching candidates to offer at a fork (Req 14.1). The
+# Play_Surface shows 2-3; candidate_paths returns up to this many and may return
+# fewer (or none) when the engine can't produce that many valid alternatives, in
+# which case the client falls back to the single engine-chosen node (Req 14.3).
+BRANCH_CANDIDATE_COUNT = 3
+# A representative CLIMB score (> 0.70) used only to drive ``decide_next`` while
+# *enumerating* on-goal advancement candidates. candidate_paths never grades a
+# quiz or bands a score — it reuses the existing CLIMB decision logic to ask
+# "which nodes could the engine advance to from here?" (Req 14.1, 14.3).
+_BRANCH_CLIMB_SCORE = 1.0
+
+
+def candidate_paths(
+    goal: str,
+    current_node: str,
+    path: list[str],
+    max_candidates: int = BRANCH_CANDIDATE_COUNT,
+) -> list[str]:
+    """Enumerate valid, band-consistent, on-goal next-step candidates (Req 14.1, 14.3).
+
+    This is the additive Phase 2 branching hook. It does NOT change the behavior
+    of :func:`decide` / :func:`deliver_node`; it only *reuses* the existing CLIMB
+    decision logic to surface a small set of alternative next Stages the engine
+    could pick when advancing toward the goal, so the Play_Surface can offer them
+    as forks (Req 14.1). When it returns fewer than two (or none), the client
+    falls back to the single engine-chosen node (Req 14.3).
+
+    The candidates are produced by repeatedly calling the existing ``decide_next``
+    LLM function with the CLIMB band — the same call :func:`decide` makes to
+    advance — and validating each proposal through the SAME enforcement
+    predicates ``decide`` uses for a CLIMB step. No banding or descent logic is
+    duplicated or altered here:
+
+    - **On-goal / never past the goal** (Req 14.3): when ``current_node`` is
+      already the goal there is nothing to advance to, so no candidates are
+      returned. The goal itself is a valid final candidate, but nothing beyond it
+      is ever offered (collection stops once the goal is proposed).
+    - **Valid & band-consistent**: a proposal is kept only when it normalizes to a
+      real node (:func:`_normalize_next_node`) and is not the current node — i.e.
+      it is a genuine one-step CLIMB advancement.
+    - **Never repeats a visited Stage** (Req 14.3): a proposal already in ``path``
+      — or already collected — is rejected (:func:`_in_path`). Each accepted
+      candidate is appended to a working path so the next ``decide_next`` call,
+      which is prompted to never repeat the path, proposes a distinct node.
+
+    Best-effort and non-fatal: a ``decide_next`` failure simply stops collection
+    and returns whatever valid candidates were gathered so far (possibly empty),
+    so a branching-hint outage degrades to the single-path flow rather than
+    erroring the loop.
+    """
+    # Already at the goal — there is no on-goal node to advance to (Req 14.3).
+    if _norm_node(current_node) == _norm_node(goal):
+        return []
+
+    candidates: list[str] = []
+    # Seed the working path with the visited nodes so decide_next avoids them;
+    # each accepted candidate is appended so subsequent calls return new nodes.
+    working_path = list(path or [])
+    # Allow a couple of extra attempts to absorb duplicate/empty proposals
+    # without looping unbounded.
+    attempts_budget = max(0, max_candidates) + 2
+
+    while len(candidates) < max_candidates and attempts_budget > 0:
+        attempts_budget -= 1
+        try:
+            raw = decide_next(
+                goal,
+                current_node,
+                working_path,
+                _BRANCH_CLIMB_SCORE,
+                "CLIMB",
+                [],
+                [],
+            )
+        except Exception as exc:
+            # Best-effort: stop on any failure and return what we have (Req 14.3).
+            logger.warning(
+                f"[game] candidate_paths decide_next failed for '{current_node}' "
+                f"(goal '{goal}'): {exc}"
+            )
+            break
+
+        if not isinstance(raw, dict):
+            break
+
+        nxt = _normalize_next_node(raw.get("next_node"))
+        # Reject a missing proposal or the current node (not an advancement).
+        if nxt is None or _norm_node(nxt) == _norm_node(current_node):
+            continue
+        # Never repeat a visited Stage or an already-collected candidate (Req 14.3).
+        if _in_path(nxt, working_path):
+            continue
+
+        candidates.append(nxt)
+        working_path.append(nxt)
+
+        # The goal is a valid final candidate; nothing past it is ever offered.
+        if _norm_node(nxt) == _norm_node(goal):
+            break
+
+    return candidates
+
+
 @dataclass(frozen=True)
 class NodePayload:
     """A delivered Node: its Intuition_Card, Clip, and Checkpoint_Quiz (Req 7, 9-11).

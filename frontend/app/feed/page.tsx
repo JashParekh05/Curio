@@ -3,15 +3,13 @@
 import { Suspense, Fragment, useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
-import { getPathFeed, getTopicFeed, recordClipEvent, getRecommendations, getClipMetadata, getRemediation, type Clip, type FeedResponse, type TopicRecommendation, type Checkpoint, type FeedLevel, type RewatchClip } from "@/lib/api";
+import { getPathFeed, getTopicFeed, recordClipEvent, getRecommendations, getClipMetadata, getRemediation, type Clip, type FeedResponse, type TopicRecommendation, type Checkpoint, type RewatchClip } from "@/lib/api";
 import { flushClipEvent, type LastLogged } from "@/lib/clip-telemetry";
 import { computeWarmWindow, AHEAD, BEHIND } from "@/lib/warm-window";
 import { createOverlayCache, getOverlay, setOverlay, hasOverlay, deriveOverlay, type OverlayCache, type OverlayMetadata } from "@/lib/overlay-cache";
 import { isRefreshEligible, REFRESH_MIN_INTERVAL_MS } from "@/lib/refresh-eligibility";
 import { shareOrCopy, topicShareUrl } from "@/lib/share";
 import ReelPlayer from "@/components/ReelPlayer";
-import PlanPanel from "@/components/PlanPanel";
-import LevelStepper from "@/components/LevelStepper";
 import SoftCheckpointCard from "@/components/SoftCheckpointCard";
 
 const POLL_INTERVAL_MS = 4000;
@@ -39,18 +37,12 @@ function FeedContent() {
   // Per-topic soft checkpoints from the feed. Empty/absent for a topic means its
   // scroll renders exactly as before (no regression).
   const [checkpointsByTopic, setCheckpointsByTopic] = useState<Record<string, Checkpoint[]>>({});
-  // The serialized LeveledPath for the Level -> Topic -> Beat stepper. Each
-  // FeedResponse item carries the full path; empty means a single implicit level
-  // (legacy single-list) and the stepper button stays hidden.
-  const [levels, setLevels] = useState<FeedLevel[]>([]);
-  const [showLevels, setShowLevels] = useState(false);
   // Soft "rewatch these clips" suggestions for the just-finished topic, shown on
   // the end-card after a weak checkpoint. Empty unless the learner did poorly.
   const [rewatchClips, setRewatchClips] = useState<RewatchClip[]>([]);
   const [timedOut, setTimedOut] = useState(false);
   const [loadError, setLoadError] = useState(false);
   const [recommendations, setRecommendations] = useState<TopicRecommendation[]>([]);
-  const [showPlan, setShowPlan] = useState(false);
   const [shareToast, setShareToast] = useState<string | null>(null);
   // Bumped after a refresh-on-return replaces a cached overlay so the active
   // caption re-renders from the updated Overlay_Cache entry.
@@ -113,10 +105,6 @@ function FeedContent() {
         if (Object.keys(cpByTopic).length > 0) {
           setCheckpointsByTopic((prev) => ({ ...prev, ...cpByTopic }));
         }
-        // The LeveledPath is identical across feed items; adopt the first
-        // non-empty projection. Absent -> stepper hidden (legacy single list).
-        const lp = feeds.find((f) => f.levels && f.levels.length > 0)?.levels;
-        if (lp && lp.length > 0) setLevels(lp);
         setProcessing(feeds.some((f) => f.processing));
         // Terminal-empty short-circuit: when every topic is out of its
         // self-heal budget (failed) or finished empty, and no clips exist at
@@ -393,10 +381,6 @@ function FeedContent() {
     getRecommendations(sessionId, session?.access_token ?? "").then(setRecommendations).catch(() => {});
   }, [activeIndex, clips.length, sessionId]);
 
-  // Real mastery-driven progress (GET /api/progress) is no longer fetched: that
-  // route was removed during decommissioning. The stepper and plan panel rely
-  // entirely on the lightweight feed-position signal (coveredSlugs) instead.
-
   // When the learner reaches the end card, surface a soft "rewatch these clips"
   // suggestion for the just-finished topic if they did poorly — either a weak
   // checkpoint (more wrong than right) or below-threshold mastery. Best-effort:
@@ -480,70 +464,6 @@ function FeedContent() {
     .split("-")
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
     .join(" ");
-
-  // Ordered, de-duplicated topics for the plan overlay, in feed order.
-  const orderedTopics = useMemo(() => {
-    const seen = new Set<string>();
-    const out: { slug: string; name: string }[] = [];
-    for (const c of clips) {
-      const slug = topicLabels[c.id];
-      if (slug && !seen.has(slug)) {
-        seen.add(slug);
-        out.push({
-          slug,
-          name: slug.split("-").map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" "),
-        });
-      }
-    }
-    return out;
-  }, [clips, topicLabels]);
-
-  // The active beat (section_index) within the current topic, for the stepper's
-  // Beat tier. null when the clip carries no beat (legacy / role-less clip).
-  const activeSection = activeClip?.section_index ?? null;
-
-  // Topics the learner has reached so far, for lightweight per-level progress
-  // (topics covered / total). A topic counts as covered once its first clip in
-  // the flattened feed is at or before the active index. This is a placeholder
-  // signal until Phase 3 wires real mastery from GET /api/progress (task 19.1).
-  const coveredSlugs = useMemo(() => {
-    const firstIdx: Record<string, number> = {};
-    clips.forEach((c, i) => {
-      const slug = topicLabels[c.id];
-      if (slug && firstIdx[slug] === undefined) firstIdx[slug] = i;
-    });
-    const covered = new Set<string>();
-    for (const [slug, idx] of Object.entries(firstIdx)) {
-      if (idx <= activeIndex) covered.add(slug);
-    }
-    return covered;
-  }, [clips, topicLabels, activeIndex]);
-
-  // Real per-topic mastery + per-level percent came from GET /api/progress, which
-  // was removed during decommissioning. The stepper and plan panel now rely
-  // entirely on the lightweight feed-position signal (coveredSlugs), so these
-  // stay undefined and those surfaces fall back to it.
-  const topicMastery = undefined;
-  const levelPercent = undefined;
-
-  // Jump to a topic (or a specific section) from the plan overlay. Prefer an
-  // in-place scroll to the already-loaded clip; fall back to a route navigation
-  // with start params when that beat hasn't been fetched yet.
-  const jumpToPlan = useCallback((slug: string, sectionIndex: number | null) => {
-    const idx = clips.findIndex(
-      (c) => topicLabels[c.id] === slug && (sectionIndex === null || c.section_index === sectionIndex),
-    );
-    if (idx >= 0) {
-      goTo(idx);
-    } else if (sessionId) {
-      const extra = sectionIndex !== null
-        ? `&start_topic=${slug}&start_section=${sectionIndex}`
-        : `&start_topic=${slug}`;
-      router.push(`/feed?session=${sessionId}${extra}`);
-    }
-    setShowPlan(false);
-    setShowLevels(false);
-  }, [clips, topicLabels, goTo, sessionId, router]);
 
   // Share the current topic (deep link lands a new visitor straight on it).
   const handleShare = useCallback(async () => {
@@ -669,71 +589,8 @@ function FeedContent() {
               Share
             </button>
           )}
-          {sessionId && levels.length >= 2 && (
-            <button
-              onClick={() => setShowLevels(true)}
-              className="brutal-dark-btn bg-accent-lime text-ink font-bold px-3 py-1.5 text-xs leading-none"
-            >
-              Levels
-            </button>
-          )}
-          {sessionId && orderedTopics.length > 0 && (
-            <button
-              onClick={() => setShowPlan(true)}
-              className="brutal-dark-btn bg-accent-yellow text-ink font-bold px-3 py-1.5 text-xs leading-none"
-            >
-              Plan
-            </button>
-          )}
         </span>
       </div>
-
-      {/* Level -> Topic -> Beat stepper (Phase 1, Req 1.1, 4.2). A slide-in panel
-          mirroring the Plan overlay. Only shown for a genuine multi-level
-          LeveledPath; a single implicit level keeps the legacy chrome unchanged.
-          Every level is navigable — later levels are never locked (soft). */}
-      {sessionId && levels.length >= 2 && showLevels && (
-        <div className="absolute inset-0 z-40 flex">
-          <div className="flex-1 bg-ink/50" onClick={() => setShowLevels(false)} />
-          <div
-            className="w-[85%] max-w-sm h-full bg-paper border-l-[3px] border-ink overflow-y-auto"
-            style={{ scrollbarWidth: "none" }}
-          >
-            <div className="sticky top-0 bg-paper px-4 py-3 border-b-[3px] border-ink flex items-center justify-between gap-2">
-              <p className="text-ink font-black text-base">Your levels</p>
-              <button
-                onClick={() => setShowLevels(false)}
-                className="brutal-btn bg-white text-ink font-black w-7 h-7 flex items-center justify-center shadow-brutal-sm"
-                aria-label="Close levels"
-              >
-                X
-              </button>
-            </div>
-            <div className="p-3">
-              <LevelStepper
-                levels={levels}
-                activeSlug={activeTopicSlug}
-                activeSection={activeSection}
-                coveredSlugs={coveredSlugs}
-                topicMastery={topicMastery}
-                levelPercent={levelPercent}
-                onJump={jumpToPlan}
-              />
-            </div>
-          </div>
-        </div>
-      )}
-
-      {sessionId && (
-        <PlanPanel
-          open={showPlan}
-          onClose={() => setShowPlan(false)}
-          topics={orderedTopics}
-          activeSlug={activeTopicSlug}
-          sessionId={sessionId}
-          onJump={jumpToPlan}
-        />
-      )}
 
       {shareToast && (
         <div className="absolute bottom-8 inset-x-0 z-40 flex justify-center pointer-events-none">

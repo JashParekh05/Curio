@@ -8,7 +8,7 @@ implemented in task 5.2 and the router is registered in ``main.py`` in task 5.3.
 import logging
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from app.auth import require_user
@@ -88,6 +88,14 @@ class NodeResponse(BaseModel):
     hook: str  # Intuition_Card (Req 9)
     clip: NodeClip | None  # None when no clip affordable (Req 10.4)
     quiz: list[ProbeQuestion]  # 3 validated MCQs (Req 11.3)
+
+
+class PathsResponse(BaseModel):
+    # Additive Phase 2 branching hook (Req 14.1, 14.3): a small set of valid,
+    # band-consistent, not-in-path candidate next nodes the engine could advance
+    # to. May be empty/short, in which case the client falls back to the single
+    # engine-chosen node. Does NOT alter /decide or /node behavior.
+    candidates: list[str]
 
 
 class LocalProgressNode(BaseModel):
@@ -244,6 +252,35 @@ async def deliver_node(
         clip=_to_node_clip(result.clip),
         quiz=[_to_probe_question(q) for q in result.quiz],
     )
+
+
+@router.get("/paths", response_model=PathsResponse)
+async def candidate_paths(
+    goal: str = Query(..., description="The Goal_Node (entered topic)"),
+    current_node: str = Query(..., description="The node the learner is on"),
+    path: list[str] = Query(
+        default_factory=list, description="Nodes already visited this session"
+    ),
+    caller_id: str = Depends(require_user),
+) -> PathsResponse:
+    """Return 2-3 valid candidate next nodes for learner-chosen branching (Req 14.1, 14.3).
+
+    Additive, read-only Phase 2 hook. It does NOT change the behavior of
+    ``/session``, ``/decide``, or ``/node`` — it reuses the existing CLIMB
+    decision logic (``game.candidate_paths`` → ``decide_next``) to surface
+    alternative on-goal next Stages the engine could advance to, so the
+    Play_Surface can offer them as forks (Req 14.1). Candidates are guaranteed
+    valid, band-consistent, not already in ``path``, and never past the goal
+    (Req 14.3). The helper is best-effort: when it can't produce candidates the
+    list is empty/short and the client falls back to the single-path flow, so
+    this endpoint never errors the loop.
+    """
+    candidates = game_service.candidate_paths(
+        goal=goal,
+        current_node=current_node,
+        path=list(path),
+    )
+    return PathsResponse(candidates=candidates)
 
 
 @router.post("/resume", response_model=ResumeResponse)

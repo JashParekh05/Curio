@@ -26,6 +26,7 @@ import {
   startGameSession,
   decideGame,
   deliverGameNode,
+  getGamePaths,
   type DecideGameRequest,
   type NodeResponse,
 } from "@/lib/api";
@@ -35,6 +36,8 @@ import {
   setActiveGameSessionId,
   getActiveGameSessionId,
   clearActiveGameSessionId,
+  markQuestIntroSeen,
+  hasSeenQuestIntro,
   type GameSessionState,
   type GamePhase,
   type NodeView,
@@ -48,11 +51,19 @@ import {
 } from "@/components/QuizCard";
 import { levelForXp } from "@/components/XpHud";
 import type { QuizQuestion } from "@/lib/api";
-import SkillTreeMap from "@/components/SkillTreeMap";
-import IntuitionCard from "@/components/IntuitionCard";
-import XpHud from "@/components/XpHud";
-import OutcomeCard from "@/components/OutcomeCard";
-import ClipOverlay from "@/components/ClipOverlay";
+// Retro pixel-quest reskin: the five presentation surfaces are swapped for
+// their retro twins, which preserve the EXACT props of the components they
+// replace (Req 11.1, 11.2) so the Game_State_Machine wiring below is unchanged.
+// The route is wrapped in `RetroThemeProvider` and pulls in `retro.css`.
+import "../retro.css";
+import { RetroThemeProvider } from "@/components/retro/RetroThemeProvider";
+import WorldMap from "@/components/retro/WorldMap";
+import IntuitionScroll from "@/components/retro/IntuitionScroll";
+import KnightHUD from "@/components/retro/KnightHUD";
+import BattleScreen from "@/components/retro/BattleScreen";
+import ClipCutscene from "@/components/retro/ClipCutscene";
+import QuestIntro from "@/components/retro/QuestIntro";
+import QuestSkeleton from "@/components/retro/QuestSkeleton";
 
 // ---------------------------------------------------------------------------
 // Pure state helpers
@@ -105,6 +116,25 @@ function withNode(
     is_goal: name === goal,
   };
   return { ...nodes, [name]: { ...prev, ...patch, node: name, is_goal: name === goal } };
+}
+
+// Merge learner-chosen fork candidates into the discovered-node map for display
+// on the World_Map (Req 14.1). A candidate that isn't yet a discovered node is
+// added as a NEXT ("live monster lair") placeholder so it renders as a glowing,
+// selectable branch Stage; an already-discovered candidate is left untouched so
+// its real state still shows. Pure — never mutates the input map.
+function withForkCandidates(
+  nodes: Record<string, NodeView>,
+  candidates: string[],
+  goal: string,
+): Record<string, NodeView> {
+  const merged = { ...nodes };
+  for (const name of candidates) {
+    if (!merged[name]) {
+      merged[name] = { node: name, state: "NEXT", is_goal: name === goal };
+    }
+  }
+  return merged;
 }
 
 // Apply a banded decision to the session, returning the next session state, the
@@ -255,7 +285,7 @@ function QuizRunner({
 // Play_Surface
 // ---------------------------------------------------------------------------
 
-export default function PlayPage() {
+function PlaySurface() {
   const { session: authSession } = useAuth();
   const token = authSession?.access_token ?? "";
 
@@ -265,6 +295,23 @@ export default function PlayPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [beat, setBeat] = useState<NodeBeat>("intuition");
+
+  // Transient local flag controlling whether the one-time Quest_Intro narrative
+  // beat is on screen (Req 4.1). It is NOT a persisted engine phase — the page
+  // owns it locally. A per-session "seen" marker is persisted separately
+  // (`hasSeenQuestIntro`/`markQuestIntroSeen`) so a reload does not replay the
+  // intro for a learner who has already begun/skipped it (Req 4.4).
+  const [showIntro, setShowIntro] = useState(false);
+
+  // Learner-chosen branching forks (Phase 2, Req 14). When a decision resolves
+  // to a next Stage (and the goal isn't yet reached), the page asks the additive
+  // `/api/game/paths` endpoint for the candidate next nodes the engine could
+  // advance to. When two or more come back, they are offered as selectable forks
+  // on the World_Map (Req 14.1) and the learner picks which path to take
+  // (Req 14.2). Empty/short candidates — or the endpoint being unavailable —
+  // leave this empty so the loop falls back to the single engine-chosen node
+  // with full backward compatibility (Req 14.3).
+  const [forkCandidates, setForkCandidates] = useState<string[]>([]);
 
   // Keep the latest game state in a ref so persistence + restore effects don't
   // need it in their dependency arrays.
@@ -285,6 +332,11 @@ export default function PlayPage() {
       if (restored) {
         const phase = resumablePhase(restored);
         if (phase === "node-delivery") setBeat("intuition");
+        // Replay the one-time intro only if the learner reloaded before
+        // begin/skip while still at the probe beat (Req 4.1, 4.4).
+        if (phase === "probe" && !hasSeenQuestIntro(restored.session_id)) {
+          setShowIntro(true);
+        }
         setGame({ ...restored, phase });
         return;
       }
@@ -325,6 +377,9 @@ export default function PlayPage() {
     try {
       const res = await startGameSession(trimmed, token);
       commit(newSession(res.session_id, res.goal, res.current_node, res.probe));
+      // Show the one-time Quest_Intro before the probe (Req 4.1), unless the
+      // learner has already seen it for this session.
+      setShowIntro(!hasSeenQuestIntro(res.session_id));
     } catch {
       setError("We couldn't start that quest. Try again.");
     } finally {
@@ -477,6 +532,79 @@ export default function PlayPage() {
     await fetchAndSetNode(deliver, state);
   }
 
+  // -- learner-chosen branching forks (Req 14) ------------------------------
+
+  // While the Battle screen is shown for a decision that advances to a next
+  // Stage (and the goal isn't yet reached), ask the additive `/api/game/paths`
+  // endpoint which candidate next nodes the engine could pick. Two or more
+  // candidates make a real fork the learner can choose among on the World_Map
+  // (Req 14.1); anything less (or any failure / unavailable endpoint) falls back
+  // to the single engine-chosen node (Req 14.3). The fetch is fully best-effort:
+  // it never throws into the loop and is guarded so a build without the endpoint
+  // wired simply shows no forks.
+  useEffect(() => {
+    const s = gameRef.current;
+    if (
+      !s ||
+      s.phase !== "decision" ||
+      !s.last_decision ||
+      s.last_decision.reached_goal ||
+      !s.last_decision.next_node
+    ) {
+      setForkCandidates([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        if (typeof getGamePaths !== "function") return;
+        const candidates = await getGamePaths(s.goal, s.current_node, s.path, token);
+        if (cancelled) return;
+        // A real fork needs at least two choices; otherwise keep the single-path
+        // flow via the Battle screen's Continue (Req 14.3).
+        setForkCandidates(candidates.length >= 2 ? candidates : []);
+      } catch {
+        if (!cancelled) setForkCandidates([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // Re-evaluate whenever the decision (or the node it advances from) changes.
+  }, [
+    game?.phase,
+    game?.current_node,
+    game?.goal,
+    game?.last_decision?.next_node,
+    game?.last_decision?.reached_goal,
+    token,
+  ]);
+
+  // Advance along a learner-chosen fork (Req 14.2). Mirrors
+  // `handleContinueFromOutcome` but substitutes the chosen Stage for the engine's
+  // `next_node`, then drives the normal node-delivery flow. Only candidates are
+  // actionable, so a stray click on a non-candidate Stage is ignored.
+  async function handleSelectFork(node: string) {
+    const s = gameRef.current;
+    if (!s || !s.last_decision) return;
+    if (!forkCandidates.includes(node)) return;
+    const chosen = { ...s.last_decision, next_node: node };
+    const { state, deliver, done } = applyDecision(s, chosen);
+    // Persist the learner's chosen route so a resume can render the path they
+    // took (Req 17.1, 17.2). Append the chosen Stage, avoiding consecutive
+    // duplicates so a re-pick of the same fork doesn't bloat the route.
+    const prevRoute = state.world_route ?? [];
+    const world_route =
+      prevRoute[prevRoute.length - 1] === node ? prevRoute : [...prevRoute, node];
+    const routed: GameSessionState = { ...state, world_route };
+    setForkCandidates([]);
+    if (done || deliver == null) {
+      commit({ ...routed, phase: "decision" });
+      return;
+    }
+    await fetchAndSetNode(deliver, routed);
+  }
+
   // Re-fetch the current node after a delivery failure or an empty checkpoint,
   // so a transient generation hiccup never strands the learner mid-loop.
   function retryNodeDelivery() {
@@ -499,6 +627,16 @@ export default function PlayPage() {
     setTopicError("");
     setError("");
     setBeat("intuition");
+    setShowIntro(false);
+    setForkCandidates([]);
+  }
+
+  // Dismiss the Quest_Intro (begin or skip) — mark it seen for this session so a
+  // reload doesn't replay it, then drop into the probe (Req 4.1, 4.4).
+  function dismissIntro() {
+    const s = gameRef.current;
+    if (s) markQuestIntroSeen(s.session_id);
+    setShowIntro(false);
   }
 
   // -------------------------------------------------------------------------
@@ -507,22 +645,69 @@ export default function PlayPage() {
 
   // Topic entry (no active session).
   if (!game) {
+    // Probe generation after topic entry — show the retro skeleton "summoning
+    // the realm…" beat rather than a blank/frozen screen (Req 10.1).
+    if (busy) {
+      return (
+        <main className="min-h-screen bg-paper text-ink flex items-center justify-center px-4 py-10">
+          <QuestSkeleton label="Summoning the realm…" />
+        </main>
+      );
+    }
+    // Retro topic entry — "Name thy quest" (Req 9.1). Rejects empty/whitespace
+    // before any session starts (Req 9.2, handled in `handleStart`). Styled from
+    // the retro theme layer (`pixel-quest` tokens) but keeps the accessible
+    // label/error/control contracts so the Game_State_Machine wiring and the
+    // interaction tests stay intact.
     return (
-      <main className="min-h-screen bg-paper text-ink flex items-center justify-center px-4 py-10">
+      <main
+        className="pixel-quest min-h-screen flex items-center justify-center px-4 py-10"
+        style={{ background: "var(--pq-bg)", color: "var(--pq-text)" }}
+      >
         <div className="w-full max-w-md">
           <div className="mb-6 text-center">
-            <span className="brutal bg-accent-yellow text-ink text-[11px] font-extrabold uppercase tracking-widest px-2 py-1">
-              Adaptive Quest
+            <span
+              className="pixel-font uppercase inline-block px-2 py-1"
+              style={{
+                fontSize: "0.5rem",
+                letterSpacing: "0.15em",
+                color: "var(--pq-ink)",
+                background: "var(--pq-gold)",
+                border: "3px solid var(--pq-ink)",
+              }}
+            >
+              ⚔ Adaptive Quest ⚔
             </span>
-            <h1 className="mt-4 text-2xl sm:text-3xl font-black leading-tight">
-              What do you want to learn?
+            <h1
+              className="pixel-font mt-5"
+              style={{ fontSize: "1.05rem", lineHeight: 1.5, color: "var(--pq-text)" }}
+            >
+              Name thy quest
             </h1>
-            <p className="mt-2 text-ink/70 text-sm font-medium">
-              Type any topic. We&apos;ll find exactly where you stand and build the climb.
+            <p className="pixel-body mt-3" style={{ color: "var(--pq-text)" }}>
+              Name any topic and a Dragon shall rise to guard it. We&apos;ll find
+              exactly where you stand and chart the climb.
             </p>
           </div>
-          <form onSubmit={handleStart} className="brutal-card bg-white px-4 py-4 sm:px-5 sm:py-5">
-            <label htmlFor="topic" className="block text-ink/70 text-[10px] font-black uppercase tracking-widest mb-2">
+          <form
+            onSubmit={handleStart}
+            className="px-4 py-4 sm:px-5 sm:py-5"
+            style={{
+              background: "var(--pq-panel)",
+              border: "4px solid var(--pq-ink)",
+              boxShadow: "6px 6px 0 0 rgba(0, 0, 0, 0.45)",
+            }}
+          >
+            <label
+              htmlFor="topic"
+              className="pixel-font block uppercase"
+              style={{
+                fontSize: "0.5rem",
+                letterSpacing: "0.12em",
+                marginBottom: "0.5rem",
+                color: "var(--pq-text)",
+              }}
+            >
               Your topic
             </label>
             <input
@@ -534,19 +719,46 @@ export default function PlayPage() {
                 if (topicError) setTopicError("");
               }}
               placeholder="e.g. backtracking, the French Revolution"
-              className="w-full border-2 border-ink rounded-none px-3 py-2 text-sm font-medium focus:outline-none focus:bg-accent-yellow/40"
+              className="pixel-body w-full px-3 py-2 focus:outline-none"
+              style={{
+                background: "var(--pq-paper)",
+                color: "var(--pq-ink)",
+                border: "3px solid var(--pq-ink)",
+              }}
               autoFocus
             />
             {topicError && (
-              <p className="text-accent-pink text-xs font-bold mt-2">{topicError}</p>
+              <p
+                className="pixel-body mt-2"
+                style={{ color: "var(--pq-pink)", fontSize: "0.95rem" }}
+              >
+                {topicError}
+              </p>
             )}
-            {error && <p className="text-accent-pink text-xs font-bold mt-2">{error}</p>}
+            {error && (
+              <p
+                className="pixel-body mt-2"
+                style={{ color: "var(--pq-pink)", fontSize: "0.95rem" }}
+              >
+                {error}
+              </p>
+            )}
             <button
               type="submit"
               disabled={busy}
-              className="brutal-btn bg-ink text-paper w-full mt-4 disabled:opacity-40 disabled:cursor-not-allowed"
+              className="pixel-font uppercase w-full mt-4 px-5 py-3"
+              style={{
+                fontSize: "0.625rem",
+                letterSpacing: "0.1em",
+                background: "var(--pq-gold)",
+                color: "var(--pq-ink)",
+                border: "3px solid var(--pq-ink)",
+                boxShadow: "3px 3px 0 0 rgba(0, 0, 0, 0.45)",
+                cursor: busy ? "not-allowed" : "pointer",
+                opacity: busy ? 0.5 : 1,
+              }}
             >
-              {busy ? "Summoning the map…" : "Start the quest"}
+              {busy ? "Summoning the realm…" : "Start the quest"}
             </button>
           </form>
         </div>
@@ -557,11 +769,31 @@ export default function PlayPage() {
   const decision = game.last_decision;
   const reachedGoal = !!decision?.reached_goal && game.phase === "decision";
 
+  // A real fork is on offer only at a (non-goal) decision with two+ candidates
+  // (Req 14.1). When active, the World_Map renders the candidates as selectable
+  // branch Stages and `onSelectStage` drives the chosen path (Req 14.2).
+  const forkActive = game.phase === "decision" && !reachedGoal && forkCandidates.length >= 2;
+  const mapNodes = forkActive
+    ? withForkCandidates(game.nodes, forkCandidates, game.goal)
+    : game.nodes;
+
+  // Quest_Intro — the one-time narrative beat shown after the session starts and
+  // before the probe (Req 4.1). Skippable so a returning learner is never
+  // blocked (Req 4.4). Driven by the local `showIntro` flag, gated to the probe
+  // beat so it never overlays a mid-loop node.
+  if (showIntro && game.phase === "probe") {
+    return (
+      <main className="min-h-screen bg-paper text-ink px-4 py-10 flex items-center justify-center">
+        <QuestIntro goal={game.goal} onBegin={dismissIntro} onSkip={dismissIntro} />
+      </main>
+    );
+  }
+
   // Full-screen clip beat during node delivery.
   if (game.phase === "node-delivery" && beat === "clip" && game.active_node?.clip) {
     return (
       <main className="fixed inset-0 bg-black">
-        <ClipOverlay
+        <ClipCutscene
           clip={game.active_node.clip}
           hook={game.active_node.hook}
           node={game.active_node.node}
@@ -577,7 +809,7 @@ export default function PlayPage() {
       <div className="mx-auto w-full max-w-2xl space-y-5">
         {/* HUD always on top so XP/level reads as the persistent game chrome. */}
         <div className="flex items-center justify-between gap-3">
-          <XpHud xp={game.xp} level={game.level} compact />
+          <KnightHUD xp={game.xp} level={game.level} compact />
           <button
             type="button"
             onClick={startOver}
@@ -587,14 +819,27 @@ export default function PlayPage() {
           </button>
         </div>
 
-        {/* The map of discovered nodes — always visible as the home surface. */}
-        <SkillTreeMap
-          nodes={game.nodes}
+        {/* The map of discovered nodes — always visible as the home surface.
+            At a branching fork the candidate next Stages are merged in and made
+            selectable so the learner can choose their path (Req 14.1, 14.2). */}
+        <WorldMap
+          nodes={mapNodes}
           goal={game.goal}
           currentNode={game.current_node}
           floorNode={game.floor_node}
           path={game.path}
+          onSelectStage={forkActive ? handleSelectFork : undefined}
         />
+
+        {forkActive && (
+          <p
+            className="brutal-card bg-accent-cyan text-ink px-4 py-3 text-xs font-bold"
+            role="status"
+          >
+            ⚔️ The trail forks — tap a glowing Stage on the map to choose your
+            path, or Continue to take the recommended route.
+          </p>
+        )}
 
         {error && (
           <p className="brutal bg-accent-pink text-white text-xs font-bold px-3 py-2">
@@ -622,7 +867,7 @@ export default function PlayPage() {
         {/* Outcome card with the diagnosis (Req 20.4). */}
         {game.phase === "decision" && decision && (
           <>
-            <OutcomeCard
+            <BattleScreen
               decision={decision}
               onContinue={reachedGoal ? undefined : handleContinueFromOutcome}
             />
@@ -644,7 +889,7 @@ export default function PlayPage() {
           <>
             {beat === "intuition" && (
               <>
-                <IntuitionCard
+                <IntuitionScroll
                   hook={game.active_node.hook ?? ""}
                   node={game.active_node.node}
                 />
@@ -685,25 +930,41 @@ export default function PlayPage() {
           </>
         )}
 
-        {/* Node delivery loading (active_node not yet fetched). On a delivery
-            failure, surface a retry so the loop is never stranded. */}
+        {/* Node delivery loading (active_node not yet fetched). While a Node is
+            being delivered, show the retro skeleton beat (Req 10.2). On a
+            delivery failure, surface a retry so the loop is never stranded. */}
         {game.phase === "node-delivery" && !game.active_node && (
-          <div className="brutal-card bg-white text-ink px-4 py-4 space-y-3">
-            <p className="text-sm font-bold">
-              {error ? error : "Loading the next node…"}
-            </p>
-            {error && !busy && (
-              <button
-                type="button"
-                onClick={retryNodeDelivery}
-                className="brutal-btn bg-ink text-paper w-full"
-              >
-                Try again
-              </button>
-            )}
-          </div>
+          error ? (
+            <div className="brutal-card bg-white text-ink px-4 py-4 space-y-3">
+              <p className="text-sm font-bold">{error}</p>
+              {!busy && (
+                <button
+                  type="button"
+                  onClick={retryNodeDelivery}
+                  className="brutal-btn bg-ink text-paper w-full"
+                >
+                  Try again
+                </button>
+              )}
+            </div>
+          ) : (
+            <QuestSkeleton label="Delivering the next node…" />
+          )
         )}
       </div>
     </main>
+  );
+}
+
+// The exported route wraps the Play_Surface in `RetroThemeProvider` so the
+// retro twins (WorldMap, BattleScreen, IntuitionScroll, ClipCutscene, KnightHUD)
+// read the CRT/reduced-motion context, while the Game_State_Machine, decision
+// logic, localStorage codec, prefetch, retry, and XP award all live unchanged in
+// `PlaySurface` (Req 8.1–8.4, 11.2, 20.1, 20.2).
+export default function PlayPage() {
+  return (
+    <RetroThemeProvider>
+      <PlaySurface />
+    </RetroThemeProvider>
   );
 }

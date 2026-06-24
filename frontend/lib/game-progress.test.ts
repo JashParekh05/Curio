@@ -113,3 +113,114 @@ describe("game-progress storage-unavailable fallback (Req 21.4)", () => {
     clearGameSession(sessionId);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase 2 route persistence round-trip (Req 17.1, 17.2)
+// ---------------------------------------------------------------------------
+//
+// The chosen route (`world_route`) and the optional node->world map (`worlds`)
+// are additive, optional fields on GameSessionState. Two guarantees are pinned
+// here against a real localStorage round-trip:
+//
+//   1. A session carrying `world_route` (and optionally `worlds`) persists via
+//      `persistGameSession` and restores via `restoreGameSession` with the route
+//      intact (Req 17.1, 17.2).
+//   2. An OLDER persisted session that predates these fields still restores fine
+//      with the optional fields left `undefined` (backward compatibility).
+
+describe("game-progress route persistence round-trip (Req 17.1, 17.2)", () => {
+  afterEach(() => {
+    window.localStorage.clear();
+  });
+
+  it("round-trips world_route and worlds through localStorage with the route intact", () => {
+    const sessionId = "route-roundtrip-session";
+    const session: GameSessionState = {
+      ...makeSession(sessionId),
+      world_route: ["Quantum Computing", "Linear Algebra", "Vectors"],
+      worlds: {
+        "Quantum Computing": "dragons-keep",
+        "Linear Algebra": "candyland",
+        Vectors: "forest",
+      },
+    };
+
+    persistGameSession(session);
+
+    const restored = restoreGameSession(sessionId);
+    expect(restored).not.toBeNull();
+    // The whole shape — including the chosen route — survives the round-trip.
+    expect(restored).toEqual(session);
+    expect(restored!.world_route).toEqual([
+      "Quantum Computing",
+      "Linear Algebra",
+      "Vectors",
+    ]);
+    expect(restored!.worlds).toEqual(session.worlds);
+
+    clearGameSession(sessionId);
+  });
+
+  it("round-trips world_route even when worlds is omitted", () => {
+    const sessionId = "route-only-session";
+    const session: GameSessionState = {
+      ...makeSession(sessionId),
+      world_route: ["Quantum Computing", "Linear Algebra"],
+    };
+
+    persistGameSession(session);
+
+    const restored = restoreGameSession(sessionId);
+    expect(restored).not.toBeNull();
+    expect(restored!.world_route).toEqual([
+      "Quantum Computing",
+      "Linear Algebra",
+    ]);
+    // `worlds` was never set and must stay absent after the round-trip.
+    expect(restored!.worlds).toBeUndefined();
+    expect(restored).toEqual(session);
+
+    clearGameSession(sessionId);
+  });
+
+  it("restores an older session that predates world_route/worlds (backward compatible)", () => {
+    // A session created by an earlier build of the codec — it has none of the
+    // Phase 2 fields. `makeSession` returns exactly this older shape.
+    const sessionId = "legacy-no-route-session";
+    const legacy = makeSession(sessionId);
+    expect("world_route" in legacy).toBe(false);
+    expect("worlds" in legacy).toBe(false);
+
+    persistGameSession(legacy);
+
+    const restored = restoreGameSession(sessionId);
+    expect(restored).not.toBeNull();
+    // The legacy session restores intact, with the new optional fields absent.
+    expect(restored).toEqual(legacy);
+    expect(restored!.world_route).toBeUndefined();
+    expect(restored!.worlds).toBeUndefined();
+
+    clearGameSession(sessionId);
+  });
+
+  it("restores a raw older persisted blob (written without the Phase 2 fields) without error", () => {
+    // Simulate a durable localStorage entry written by an older app version:
+    // raw JSON that simply never had `world_route`/`worlds`. The decoder must
+    // accept it and return the session unchanged.
+    const sessionId = "legacy-raw-blob-session";
+    const legacy = makeSession(sessionId);
+    window.localStorage.setItem(
+      gameSessionKey(sessionId),
+      JSON.stringify(legacy),
+    );
+
+    let restored: GameSessionState | null = null;
+    expect(() => {
+      restored = restoreGameSession(sessionId);
+    }).not.toThrow();
+    expect(restored).toEqual(legacy);
+    expect(restored!.world_route).toBeUndefined();
+
+    clearGameSession(sessionId);
+  });
+});

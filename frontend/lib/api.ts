@@ -515,3 +515,34 @@ export async function deliverGameNode(node: string, goal: string, token: string)
   if (!res.ok) throw new Error("Failed to deliver node");
   return res.json();
 }
+
+// Fetch the candidate next nodes for learner-chosen branching forks (Req 14.1,
+// 14.3) over the additive, read-only `GET /api/game/paths` endpoint. The backend
+// returns a `{ candidates: string[] }` envelope — 2–3 valid, band-consistent,
+// not-in-`path`, on-goal next nodes the engine could advance to. `path` is sent
+// as repeated `path=` query params to match the backend's
+// `list[str] = Query(...)` contract; `current_node` is the snake_cased query key.
+//
+// This is purely best-effort: it returns `[]` on ANY failure — a non-ok status,
+// a network error, an unexpected shape, or the endpoint being unavailable — so
+// the Play_Surface always falls back to the single engine-chosen `next_node`
+// with full backward compatibility (Req 14.3). It never throws.
+export async function getGamePaths(
+  goal: string,
+  currentNode: string,
+  path: string[],
+  token: string,
+): Promise<string[]> {
+  try {
+    const params = new URLSearchParams({ goal, current_node: currentNode });
+    for (const node of path) params.append("path", node);
+    const res = await fetch(`${API_BASE}/api/game/paths?${params.toString()}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data?.candidates) ? (data.candidates as string[]) : [];
+  } catch {
+    return [];
+  }
+}

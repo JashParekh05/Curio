@@ -1,0 +1,14 @@
+Press Start 2P
+==============
+
+PressStart2P-Regular.woff2 is the "Press Start 2P" typeface by CodeMan38,
+distributed under the SIL Open Font License, Version 1.1.
+
+- Font: Press Start 2P (latin subset)
+- Author: CodeMan38 (cody@zone38.net)
+- License: SIL Open Font License 1.1 (https://scripts.sil.org/OFL)
+- Source: Google Fonts (https://fonts.google.com/specimen/Press+Start+2P)
+
+The OFL permits bundling and redistribution of the font with this project.
+This subset is the Google Fonts "latin" cut (unicode-range U+0000-00FF and
+common punctuation), sufficient for the Pixel Quest retro chrome.

@@ -92,6 +92,16 @@ export interface GameSessionState {
   active_node: NodeView | null;
   last_decision: DecideResponse | null;
   updated_at: number;
+  // --- Phase 2 (additive, optional, backward compatible) -------------------
+  // The learner's chosen route through branching forks: the ordered list of
+  // Stages picked at forks on the World_Map (Req 17.1). Older persisted sessions
+  // predate this field and restore fine with it left `undefined`; on resume the
+  // World_Map renders the previously chosen route (Req 17.2).
+  world_route?: string[];
+  // Optional node -> world/biome id mapping for themed World progression
+  // (Req 15). Additive and unused in Phase 1; present here so the persisted
+  // shape is forward compatible. Older sessions restore fine without it.
+  worlds?: Record<string, string>;
 }
 
 // ---------------------------------------------------------------------------
@@ -210,5 +220,44 @@ export function clearActiveGameSessionId(): void {
     localStorage.removeItem(ACTIVE_KEY);
   } catch {
     /* ignore */
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Quest_Intro "seen" flag (per session)
+// ---------------------------------------------------------------------------
+//
+// The retro Quest_Intro narrative beat is shown once after a session starts,
+// before the placement probe (Req 4.1, 4.4). Whether it has been seen is a
+// per-session UI concern, NOT engine state, so it is persisted under its own
+// key (keyed by session id) instead of being folded into GameSessionState —
+// keeping the engine's session shape unchanged. Persisting it means a reload
+// never replays the intro for a session that has already begun. Fully guarded
+// (try/catch + SSR + in-memory fallback) like the codec above, so it never
+// throws and degrades gracefully when storage is unavailable.
+
+const INTRO_SEEN_PREFIX = "curio_game_intro_seen_";
+
+const memoryIntroSeen = new Set<string>();
+
+// Mark the Quest_Intro as seen+dismissed for a session so a reload won't replay it.
+export function markQuestIntroSeen(sessionId: string): void {
+  memoryIntroSeen.add(sessionId);
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(`${INTRO_SEEN_PREFIX}${sessionId}`, "1");
+  } catch {
+    /* keep the in-memory flag */
+  }
+}
+
+// Has the Quest_Intro already been seen+dismissed for this session?
+export function hasSeenQuestIntro(sessionId: string): boolean {
+  if (memoryIntroSeen.has(sessionId)) return true;
+  if (typeof window === "undefined") return false;
+  try {
+    return localStorage.getItem(`${INTRO_SEEN_PREFIX}${sessionId}`) != null;
+  } catch {
+    return false;
   }
 }
