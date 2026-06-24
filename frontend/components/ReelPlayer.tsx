@@ -19,25 +19,6 @@ function isYouTubeEmbed(url: string) {
   return url.includes("youtube.com/embed") || url.includes("youtube-nocookie.com/embed");
 }
 
-// Build a watch-on-YouTube URL (with start time) so every embedded clip links
-// back to YouTube — attribution required under YouTube's embed terms. Prefers
-// the stored source URL; derives a watch URL from the embed; and ALWAYS returns
-// a link (generic youtube.com) so attribution can never silently disappear.
-function youtubeWatchUrl(clip: Clip): string {
-  if (clip.source_url) return clip.source_url;
-  try {
-    const u = new URL(clip.video_url);
-    const m = u.pathname.match(/\/embed\/([^/?]+)/);
-    if (m) {
-      const start = u.searchParams.get("start");
-      return `https://www.youtube.com/watch?v=${m[1]}${start ? `&t=${start}s` : ""}`;
-    }
-  } catch {
-    /* fall through to the generic link below */
-  }
-  return "https://www.youtube.com";
-}
-
 function sanitizeYTUrl(url: string, active: boolean): string {
   try {
     const u = new URL(url);
@@ -53,7 +34,7 @@ function sanitizeYTUrl(url: string, active: boolean): string {
   }
 }
 
-export default function ReelPlayer({ clip, mode, onEnded, onFeedback, onLearnThis, overlay }: Props) {
+export default function ReelPlayer({ clip, mode, onEnded, onFeedback, onLearnThis }: Props) {
   const active = mode === "active";
   const videoRef = useRef<HTMLVideoElement>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -61,7 +42,6 @@ export default function ReelPlayer({ clip, mode, onEnded, onFeedback, onLearnThi
   const [feedback, setFeedback] = useState<"want_more" | "already_know" | null>(null);
 
   const isYT = isYouTubeEmbed(clip.video_url);
-  const watchUrl = isYT ? youtubeWatchUrl(clip) : null;
 
   // Build the iframe src once per clip so toggling active/warm never remounts or
   // reloads the embed (key stays clip.id); play/mute transitions go through the
@@ -145,29 +125,8 @@ export default function ReelPlayer({ clip, mode, onEnded, onFeedback, onLearnThi
         </div>
       )}
 
-      {/* Caption — clean white text with a strong shadow for legibility over any
-          video (no hard box, no scrim covering the player's own controls). */}
-      <div className="absolute bottom-28 inset-x-0 z-10 pl-4 pr-20 pb-2 pointer-events-none">
-        <h2 className="text-white font-extrabold text-lg leading-snug line-clamp-2 drop-shadow-[0_2px_4px_rgba(0,0,0,0.85)]">
-          {overlay?.title ?? clip.title}
-        </h2>
-        {(overlay?.description ?? clip.description) && (
-          <p className="text-white/90 text-sm mt-1.5 leading-snug line-clamp-2 font-medium drop-shadow-[0_1px_3px_rgba(0,0,0,0.85)]">
-            {overlay?.description ?? clip.description}
-          </p>
-        )}
-        {isYT && watchUrl && (
-          <a
-            href={watchUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            onClick={(e) => e.stopPropagation()}
-            className="pointer-events-auto inline-flex items-center gap-1 mt-2 rounded-pill bg-black/55 backdrop-blur-sm text-white text-xs font-semibold px-3 py-1.5 transition hover:bg-black/70"
-          >
-            Watch on YouTube ↗
-          </a>
-        )}
-      </div>
+      {/* No caption overlay — the embedded player shows its own title/controls
+          and provides YouTube attribution + link-back natively. */}
 
       {/* Right-edge control stack (Reels-style), vertically centered so it clears
           the player's bottom control bar on mobile. Clean glassy pills; selected

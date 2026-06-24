@@ -305,24 +305,24 @@ export default function DiscoverPage() {
         />
       </div>
 
-      {/* HUD — glassy chrome over the video */}
-      <div className="absolute top-0 inset-x-0 z-20 flex items-center justify-between px-4 pt-4 pb-2 pointer-events-none">
-        <button
-          onClick={() => router.push("/")}
-          className="pointer-events-auto rounded-pill bg-black/40 backdrop-blur-sm text-white font-semibold px-4 py-2 text-sm leading-none transition hover:bg-black/55"
-        >
-          Home
-        </button>
-        <span className="rounded-pill bg-black/40 backdrop-blur-sm text-white text-xs font-bold tracking-wide px-3 py-1.5">Discover</span>
+      {/* HUD — glassy chrome over the video, pushed below the embed's top bar */}
+      <div className="absolute top-0 inset-x-0 z-20 flex items-center justify-between px-4 pt-12 pb-2 pointer-events-none">
+        <span className="rounded-pill bg-black/40 backdrop-blur-sm text-white text-xs font-semibold px-3 py-1.5 tabular-nums pointer-events-auto">{activeIndex + 1} / {clips.length}</span>
         <span className="flex items-center gap-2 pointer-events-auto">
-          <span className="rounded-pill bg-black/40 backdrop-blur-sm text-white text-xs font-semibold px-3 py-1.5 tabular-nums">{activeIndex + 1} / {clips.length}</span>
           <button
-            onClick={handleShare}
-            className="rounded-pill bg-primary text-on-primary font-semibold px-3 py-1.5 text-xs leading-none shadow-elev-1 transition hover:brightness-[1.05]"
+            onClick={() => router.push("/")}
+            className="rounded-pill bg-black/40 backdrop-blur-sm text-white font-semibold px-4 py-2 text-sm leading-none transition hover:bg-black/55"
           >
-            Share
+            Home
           </button>
+          <span className="rounded-pill bg-black/40 backdrop-blur-sm text-white text-xs font-bold tracking-wide px-3 py-1.5">Discover</span>
         </span>
+        <button
+          onClick={handleShare}
+          className="rounded-pill bg-primary text-on-primary font-semibold px-3 py-1.5 text-xs leading-none shadow-elev-1 transition hover:brightness-[1.05] pointer-events-auto"
+        >
+          Share
+        </button>
       </div>
 
       {/* Nav arrows */}
