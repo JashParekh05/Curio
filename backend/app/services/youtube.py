@@ -30,6 +30,7 @@ from app.services.quota_store import (
     configured_projects,
     load_today,
 )
+from app.services.language_filter import is_probably_english
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,21 @@ TRANSCRIPT_API_URL = "https://transcriptapi.com/api/v2/youtube/transcript"
 #: YouTube Data API v3 endpoints (the single quota-charged surface).
 _SEARCH_URL = "https://www.googleapis.com/youtube/v3/search"
 _VIDEOS_URL = "https://www.googleapis.com/youtube/v3/videos"
+
+
+def _filter_english(videos: list[dict]) -> list[dict]:
+    """Drop non-English videos from a search-result list (English-only feed).
+
+    Uses each video's declared ``language`` (from ``defaultAudioLanguage`` /
+    ``defaultLanguage``) when present, else a non-Latin-script heuristic on its
+    title + description. Pure-delegating to ``language_filter``; safe on dicts
+    that predate the ``language`` key (None -> heuristic fallback), so it also
+    cleans entries served from the existing search cache.
+    """
+    return [
+        v for v in videos
+        if is_probably_english(v.get("language"), v.get("title"), v.get("description"))
+    ]
 
 
 def _cache_get(video_id: str) -> list[dict] | None:
@@ -227,6 +243,7 @@ def _search_and_describe(query: str, api_key: str, project_id: str,
     durations: dict[str, int] = {}
     captions: dict[str, bool] = {}
     views: dict[str, int] = {}
+    langs: dict[str, str | None] = {}
     if charge_and_persist(project_id, METADATA_COST, now_utc=now_utc):
         try:
             details = requests.get(
@@ -253,6 +270,11 @@ def _search_and_describe(query: str, api_key: str, project_id: str,
                 # Uploader-provided caption flag only; auto-captions still fetchable
                 # via TranscriptAPI, so this is a soft signal, never a filter.
                 captions[v["id"]] = cd.get("caption") == "true"
+                # Declared audio/caption language drives the English-only filter
+                # (relevanceLanguage only biases search; this is the authoritative
+                # signal that catches e.g. an English-titled Hindi-audio video).
+                sn = v.get("snippet", {})
+                langs[v["id"]] = sn.get("defaultAudioLanguage") or sn.get("defaultLanguage")
                 try:
                     views[v["id"]] = int(v.get("statistics", {}).get("viewCount", 0))
                 except (TypeError, ValueError):
@@ -276,8 +298,19 @@ def _search_and_describe(query: str, api_key: str, project_id: str,
             "duration_seconds": durations.get(vid_id, 180),
             "has_caption": captions.get(vid_id, False),
             "view_count": views.get(vid_id, 0),
+            "language": langs.get(vid_id),
         })
-    return videos
+
+    # English-only feed: drop declared-non-English (and non-Latin-script) videos
+    # before caching/returning, so every consumer (discover, learn, worker) and
+    # the search cache stay English-only.
+    kept = _filter_english(videos)
+    if len(kept) < len(videos):
+        logger.info(
+            f"[yt-search] language filter dropped {len(videos) - len(kept)}/"
+            f"{len(videos)} non-English result(s) for query={query!r}"
+        )
+    return kept
 
 
 def youtube_search(query: str, *, now_utc: datetime | None = None) -> list[dict] | None:
@@ -301,11 +334,23 @@ def youtube_search(query: str, *, now_utc: datetime | None = None) -> list[dict]
 
     Validates: Requirements 2.5, 6.3, 6.4
     """
-    # 1. Cache-first: zero units, pool untouched.
+    # 1. Cache-first: zero units, pool untouched. Apply the English filter on
+    #    read too, so entries cached before the filter existed (no `language`
+    #    key -> script heuristic) are cleaned without a cache purge.
     cached = search_cache_get(query)
     if cached:
-        logger.info(f"[yt-search] cache hit: query={query!r} ({len(cached)} videos, 0 units)")
-        return cached
+        filtered = _filter_english(cached)
+        if filtered:
+            logger.info(
+                f"[yt-search] cache hit: query={query!r} "
+                f"({len(filtered)}/{len(cached)} English videos, 0 units)"
+            )
+            return filtered
+        # The cached entry was entirely non-English: fall through to a fresh,
+        # filtered search so the query is re-cached English-only.
+        logger.info(
+            f"[yt-search] cached query={query!r} was all non-English; re-searching"
+        )
 
     # 2. Resolve configured project -> api_key, and today's per-project usage.
     key_by_project = dict(configured_projects())

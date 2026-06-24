@@ -166,6 +166,7 @@ def _node_transcribe(state: PipelineState) -> dict:
     Candidates are relevance-ranked first, so the one we keep is the best
     semantic match to the section query, not just YouTube's top result."""
     from app.services.youtube import _fetch_transcript
+    from app.services.language_filter import transcript_looks_non_english
 
     query = state.get("search_query") or state.get("topic_name", "")
     candidates = _rank_candidates(state["videos"], query)
@@ -179,11 +180,17 @@ def _node_transcribe(state: PipelineState) -> dict:
         if len(kept) >= limit:
             break
         transcript = _fetch_transcript(v["video_id"])
-        if transcript:
-            v["transcript"] = transcript
-            kept.append(v)
-        else:
+        if not transcript:
             errors.append(f"No transcript: {v['video_id']}")
+            continue
+        # English-only catch-all: a non-Latin-script transcript (e.g. Devanagari
+        # Hindi) means the video is non-English even when its title is English
+        # and YouTube declared no language. Skip and keep scanning candidates.
+        if transcript_looks_non_english(transcript):
+            errors.append(f"Non-English transcript: {v['video_id']}")
+            continue
+        v["transcript"] = transcript
+        kept.append(v)
     return {"videos": kept, "errors": errors}
 
 
