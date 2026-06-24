@@ -16,23 +16,26 @@ interface Props {
 }
 
 function isYouTubeEmbed(url: string) {
-  return url.includes("youtube.com/embed");
+  return url.includes("youtube.com/embed") || url.includes("youtube-nocookie.com/embed");
 }
 
 // Build a watch-on-YouTube URL (with start time) so every embedded clip links
 // back to YouTube — attribution required under YouTube's embed terms. Prefers
-// the stored source URL; otherwise derives it from the embed URL.
-function youtubeWatchUrl(clip: Clip): string | null {
+// the stored source URL; derives a watch URL from the embed; and ALWAYS returns
+// a link (generic youtube.com) so attribution can never silently disappear.
+function youtubeWatchUrl(clip: Clip): string {
   if (clip.source_url) return clip.source_url;
   try {
     const u = new URL(clip.video_url);
     const m = u.pathname.match(/\/embed\/([^/?]+)/);
-    if (!m) return null;
-    const start = u.searchParams.get("start");
-    return `https://www.youtube.com/watch?v=${m[1]}${start ? `&t=${start}s` : ""}`;
+    if (m) {
+      const start = u.searchParams.get("start");
+      return `https://www.youtube.com/watch?v=${m[1]}${start ? `&t=${start}s` : ""}`;
+    }
   } catch {
-    return null;
+    /* fall through to the generic link below */
   }
+  return "https://www.youtube.com";
 }
 
 function sanitizeYTUrl(url: string, active: boolean): string {
@@ -112,7 +115,7 @@ export default function ReelPlayer({ clip, mode, onEnded, onFeedback, onLearnThi
           key={clip.id}
           src={ytSrc}
           title={clip.title}
-          className="absolute inset-0 w-full h-full"
+          className="absolute inset-x-0 top-0 w-full h-[calc(100%-64px-env(safe-area-inset-bottom))]"
           allow="autoplay; encrypted-media; fullscreen"
           allowFullScreen
         />
@@ -120,7 +123,7 @@ export default function ReelPlayer({ clip, mode, onEnded, onFeedback, onLearnThi
         <video
           ref={videoRef}
           src={clip.video_url}
-          className="absolute inset-0 w-full h-full object-cover"
+          className="absolute inset-x-0 top-0 w-full h-[calc(100%-64px-env(safe-area-inset-bottom))] object-cover"
           playsInline
           muted={!active}
           onEnded={onEnded}

@@ -32,6 +32,13 @@ function LearnContent() {
   // Append &quiz=off in Basic mode so the feed suppresses quiz checkpoints.
   const feedUrl = (base: string) => `${base}${basic ? "&quiz=off" : ""}`;
 
+  // Toggle the mode AND keep the URL in sync (?mode=basic), so a refresh or a
+  // shared link preserves the chosen mode instead of resetting to Structured.
+  const selectMode = (b: boolean) => {
+    setBasic(b);
+    router.replace(b ? "/learn?mode=basic" : "/learn", { scroll: false });
+  };
+
   useEffect(() => {
     if (!user || !session) return;
     getUserHistory(user.id, session.access_token).then(setHistory).catch(() => {});
@@ -72,14 +79,14 @@ function LearnContent() {
         <div className="flex rounded-pill bg-surface-alt p-1 border border-outline">
           <button
             type="button"
-            onClick={() => setBasic(false)}
+            onClick={() => selectMode(false)}
             className={`flex-1 rounded-pill py-2 text-sm font-semibold transition ${!basic ? "bg-primary text-on-primary shadow-elev-1" : "text-on-surface-muted hover:text-on-surface"}`}
           >
             Structured
           </button>
           <button
             type="button"
-            onClick={() => setBasic(true)}
+            onClick={() => selectMode(true)}
             className={`flex-1 rounded-pill py-2 text-sm font-semibold transition ${basic ? "bg-primary text-on-primary shadow-elev-1" : "text-on-surface-muted hover:text-on-surface"}`}
           >
             Basic

@@ -67,6 +67,8 @@ def embed_texts(texts: list[str]) -> list[list[float] | None]:
 
 def cosine_similarity(a: list[float], b: list[float]) -> float:
     """Dot product of two already-normalized vectors = cosine similarity."""
+    if len(a) != len(b):
+        return 0.0  # dimension mismatch (corrupt/legacy embedding): neutral, never rank on garbage
     return sum(x * y for x, y in zip(a, b))
 
 

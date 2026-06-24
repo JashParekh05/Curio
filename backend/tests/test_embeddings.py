@@ -12,6 +12,13 @@ class TestCosineSimilarity:
     def test_opposite(self):
         assert cosine_similarity([1.0, 0.0], [-1.0, 0.0]) == -1.0
 
+    def test_dimension_mismatch_returns_zero(self):
+        # A corrupt/legacy embedding of a different length must score neutral,
+        # never silently truncate via zip and rank on garbage.
+        assert cosine_similarity([1.0, 0.0], [1.0, 0.0, 0.0]) == 0.0
+        assert cosine_similarity([1.0, 0.0, 0.0], [1.0, 0.0]) == 0.0
+        assert cosine_similarity([], [1.0]) == 0.0
+
 
 class TestEmaUpdate:
     def test_result_is_normalized(self):
