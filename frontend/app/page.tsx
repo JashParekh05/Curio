@@ -36,7 +36,7 @@ const INTERESTS = [
 
 export default function Home() {
   const router = useRouter();
-  const { user, session, loading, isAuthenticated, isGuest, signOut } = useAuth();
+  const { user, session, loading, isAuthenticated, isGuest, anonFailed, retryGuest, signOut } = useAuth();
   const [seeding, setSeeding] = useState(false);
   const [customTopic, setCustomTopic] = useState("");
 
@@ -46,12 +46,21 @@ export default function Home() {
       router.replace("/welcome");
       return;
     }
+    // The Home tab links to /?home=1 to view this launcher; a bare "/" (the app
+    // opening) drops a ready user straight into the Discover feed (feed-first).
+    const forceLauncher =
+      typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get("home") === "1";
     if (isAuthenticated) {
       getUserProfile(user.id, session.access_token)
         .then((p) => {
           if (!p.onboarding_complete) router.replace("/onboarding");
+          else if (!forceLauncher) router.replace("/discover");
         })
         .catch(() => {});
+    } else if (!forceLauncher) {
+      // guest, intro already seen → open straight into the feed
+      router.replace("/discover");
     }
   }, [user, session, isAuthenticated]);
 
@@ -77,12 +86,28 @@ export default function Home() {
         <h1 className="font-display text-5xl font-extrabold tracking-tight">
           Curio<span className="text-primary">.</span>
         </h1>
-        <p className="text-on-surface-muted text-center max-w-xs">
-          A feed that learns what you love — and teaches it to you, one clip at a time.
-        </p>
-        <Button size="lg" onClick={() => router.push("/login")}>
-          Get started
-        </Button>
+        {anonFailed ? (
+          <>
+            <p className="text-on-surface-muted text-center max-w-xs">
+              We couldn&apos;t start a session. Check your connection and try again.
+            </p>
+            <Button size="lg" onClick={() => retryGuest()}>
+              Retry
+            </Button>
+            <Button variant="soft" size="lg" onClick={() => router.push("/login")}>
+              Sign in instead
+            </Button>
+          </>
+        ) : (
+          <>
+            <p className="text-on-surface-muted text-center max-w-xs">
+              A feed that learns what you love — and teaches it to you, one clip at a time.
+            </p>
+            <Button size="lg" onClick={() => router.push("/login")}>
+              Get started
+            </Button>
+          </>
+        )}
         <LegalFooter />
       </main>
     );
