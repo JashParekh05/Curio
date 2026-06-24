@@ -39,6 +39,7 @@ export default function Home() {
   const { user, session, loading, isAuthenticated, isGuest, anonFailed, retryGuest, signOut } = useAuth();
   const [seeding, setSeeding] = useState(false);
   const [customTopic, setCustomTopic] = useState("");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     if (!user || !session) return;
@@ -64,13 +65,22 @@ export default function Home() {
     }
   }, [user, session, isAuthenticated]);
 
-  async function startFeed(seed?: string) {
+  function toggleTopic(t: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(t)) next.delete(t);
+      else next.add(t);
+      return next;
+    });
+  }
+
+  async function startFeed(seeds: string[] = []) {
     if (seeding) return;
-    // Optional cold-start seed: nudge the interest vector before the feed loads.
-    if (seed && user && session) {
+    // Optional cold-start seeds: nudge the interest vector before the feed loads.
+    if (seeds.length && user && session) {
       setSeeding(true);
       try {
-        await setUserInterests(user.id, [seed], session.access_token);
+        await setUserInterests(user.id, seeds, session.access_token);
       } catch {
         /* non-blocking — the feed still learns from scroll signals */
       }
@@ -141,7 +151,7 @@ export default function Home() {
         {/* Three modes */}
         <div className="flex flex-col gap-3">
           <button
-            onClick={() => startFeed()}
+            onClick={() => startFeed(Array.from(selected))}
             disabled={seeding}
             className="group text-left bg-surface rounded-card border border-outline shadow-elev-1 px-5 py-4 transition duration-base hover:shadow-elev-2 hover:-translate-y-0.5 disabled:opacity-50 motion-reduce:transform-none"
           >
@@ -177,28 +187,38 @@ export default function Home() {
           </button>
         </div>
 
-        {/* Optional cold-start seeds for Discover */}
+        {/* Optional cold-start seeds for Discover — pick as many as you like */}
         <div className="flex flex-col gap-2">
           <p className="text-on-surface-muted text-xs font-semibold uppercase tracking-wide">
             Warm your Discover feed (optional)
           </p>
           <div className="flex flex-wrap gap-2">
-            {INTERESTS.map((i) => (
-              <button
-                key={i}
-                onClick={() => startFeed(i)}
-                disabled={seeding}
-                className="rounded-pill bg-surface-alt text-on-surface text-sm px-3.5 py-2 border border-outline transition duration-base hover:brightness-95 disabled:opacity-50"
-              >
-                {i}
-              </button>
-            ))}
+            {[...INTERESTS, ...Array.from(selected).filter((t) => !INTERESTS.includes(t))].map((i) => {
+              const on = selected.has(i);
+              return (
+                <button
+                  key={i}
+                  onClick={() => toggleTopic(i)}
+                  disabled={seeding}
+                  aria-pressed={on}
+                  className={`rounded-pill text-sm px-3.5 py-2 border transition duration-base disabled:opacity-50 ${
+                    on
+                      ? "bg-primary text-on-primary border-primary shadow-elev-1"
+                      : "bg-surface-alt text-on-surface border-outline hover:brightness-95"
+                  }`}
+                >
+                  {i}
+                </button>
+              );
+            })}
           </div>
           <form
             onSubmit={(e) => {
               e.preventDefault();
               const t = customTopic.trim();
-              if (t) startFeed(t);
+              if (!t) return;
+              setSelected((prev) => new Set(prev).add(t));
+              setCustomTopic("");
             }}
             className="flex gap-2 pt-1"
           >
@@ -213,6 +233,13 @@ export default function Home() {
               Add
             </Button>
           </form>
+          {selected.size > 0 && (
+            <Button size="lg" onClick={() => startFeed(Array.from(selected))} disabled={seeding} className="mt-1">
+              {seeding
+                ? "Warming up…"
+                : `Start your feed with ${selected.size} topic${selected.size === 1 ? "" : "s"} →`}
+            </Button>
+          )}
         </div>
       </div>
       <LegalFooter />
