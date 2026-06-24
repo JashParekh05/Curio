@@ -7,6 +7,7 @@ import { getUserProfile, setUserInterests } from "@/lib/api";
 import { hasSeenIntro } from "@/lib/intro";
 import LegalFooter from "@/components/LegalFooter";
 import { Button } from "@/components/pop/Button";
+import { Input } from "@/components/pop/Input";
 
 // Passive-first home (Friendly Pop). The product is the interest-learning feed:
 // you scroll, it picks up what you love from signals (watch time, 🔥/✓, skips)
@@ -37,6 +38,7 @@ export default function Home() {
   const router = useRouter();
   const { user, session, loading, isAuthenticated, isGuest, signOut } = useAuth();
   const [seeding, setSeeding] = useState(false);
+  const [customTopic, setCustomTopic] = useState("");
 
   useEffect(() => {
     if (!user || !session) return;
@@ -167,6 +169,25 @@ export default function Home() {
               </button>
             ))}
           </div>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              const t = customTopic.trim();
+              if (t) startFeed(t);
+            }}
+            className="flex gap-2 pt-1"
+          >
+            <Input
+              value={customTopic}
+              onChange={(e) => setCustomTopic(e.target.value)}
+              placeholder="Add your own topic…"
+              disabled={seeding}
+              className="flex-1"
+            />
+            <Button type="submit" variant="soft" disabled={seeding || !customTopic.trim()}>
+              Add
+            </Button>
+          </form>
         </div>
       </div>
       <LegalFooter />
