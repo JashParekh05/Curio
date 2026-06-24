@@ -19,6 +19,22 @@ function isYouTubeEmbed(url: string) {
   return url.includes("youtube.com/embed");
 }
 
+// Build a watch-on-YouTube URL (with start time) so every embedded clip links
+// back to YouTube — attribution required under YouTube's embed terms. Prefers
+// the stored source URL; otherwise derives it from the embed URL.
+function youtubeWatchUrl(clip: Clip): string | null {
+  if (clip.source_url) return clip.source_url;
+  try {
+    const u = new URL(clip.video_url);
+    const m = u.pathname.match(/\/embed\/([^/?]+)/);
+    if (!m) return null;
+    const start = u.searchParams.get("start");
+    return `https://www.youtube.com/watch?v=${m[1]}${start ? `&t=${start}s` : ""}`;
+  } catch {
+    return null;
+  }
+}
+
 function sanitizeYTUrl(url: string, active: boolean): string {
   try {
     const u = new URL(url);
@@ -42,6 +58,7 @@ export default function ReelPlayer({ clip, mode, onEnded, onFeedback, onLearnThi
   const [feedback, setFeedback] = useState<"want_more" | "already_know" | null>(null);
 
   const isYT = isYouTubeEmbed(clip.video_url);
+  const watchUrl = isYT ? youtubeWatchUrl(clip) : null;
 
   // Build the iframe src once per clip so toggling active/warm never remounts or
   // reloads the embed (key stays clip.id); play/mute transitions go through the
@@ -135,6 +152,17 @@ export default function ReelPlayer({ clip, mode, onEnded, onFeedback, onLearnThi
           <p className="text-white/90 text-sm mt-1.5 leading-snug line-clamp-2 font-medium drop-shadow-[0_1px_3px_rgba(0,0,0,0.85)]">
             {overlay?.description ?? clip.description}
           </p>
+        )}
+        {isYT && watchUrl && (
+          <a
+            href={watchUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            className="pointer-events-auto inline-flex items-center gap-1 mt-2 rounded-pill bg-black/55 backdrop-blur-sm text-white text-xs font-semibold px-3 py-1.5 transition hover:bg-black/70"
+          >
+            Watch on YouTube ↗
+          </a>
         )}
       </div>
 
