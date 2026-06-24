@@ -76,3 +76,17 @@ def ema_update(old: list[float], new: list[float], alpha: float = 0.2) -> list[f
     updated = [(1 - alpha) * o + alpha * n for o, n in zip(old, new)]
     norm = math.sqrt(sum(x * x for x in updated)) or 1.0
     return [x / norm for x in updated]
+
+
+def ema_repel(old: list[float], target: list[float], alpha: float = 0.1) -> list[float]:
+    """Push `old` AWAY from `target` (negative-signal learning), then re-normalize.
+
+    Subtracts a fraction of the disliked direction so cosine(result, target)
+    drops — the semantic counterpart to ema_update's attraction. Used when a
+    learner skips/dismisses a clip so the taste vector actively moves away from
+    that kind of content, not just toward what they like.
+    """
+    import math
+    updated = [o - alpha * t for o, t in zip(old, target)]
+    norm = math.sqrt(sum(x * x for x in updated)) or 1.0
+    return [x / norm for x in updated]

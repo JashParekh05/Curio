@@ -12,6 +12,11 @@ logger = logging.getLogger(__name__)
 
 _DISCOVER_COLS = "id,topic_slug,title,description,video_url,thumbnail_url,duration_seconds,source_url,source_platform,hook_score,created_at,embedding"
 
+# Fraction of the discover feed reserved for exploration: off-taste clips sampled
+# from the lower-ranked pool so personalization never collapses into a one-topic
+# echo chamber (TikTok injects exploration the same way).
+_EXPLORE_FRACTION = 0.15
+
 
 def _fetch_clips_for_slug(
     db,
@@ -173,4 +178,13 @@ def _fetch_discover_clips(
     # so discover was only personalized at topic-selection, not ordering).
     # Source-spread the top `limit` to avoid clumping clips from one video.
     clips = sorted(clips, key=lambda c: c.final_score or 0.0, reverse=True)
-    return _spread_by_source(clips[:limit])
+    # Exploration (anti-filter-bubble): reserve a slice of the feed for off-taste
+    # clips sampled from the lower-ranked pool, so a strong taste never collapses
+    # the feed into a single-topic echo chamber.
+    explore_n = int(round(limit * _EXPLORE_FRACTION))
+    top_n = max(0, limit - explore_n)
+    selected = clips[:top_n]
+    rest = clips[top_n:]
+    if rest and explore_n > 0:
+        selected = selected + random.sample(rest, min(explore_n, len(rest)))
+    return _spread_by_source(selected[:limit])

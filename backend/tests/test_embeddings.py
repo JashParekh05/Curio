@@ -1,5 +1,5 @@
 import math
-from app.services.embeddings import cosine_similarity, ema_update
+from app.services.embeddings import cosine_similarity, ema_update, ema_repel
 
 
 class TestCosineSimilarity:
@@ -26,4 +26,22 @@ class TestEmaUpdate:
 
     def test_alpha_zero_keeps_old_direction(self):
         out = ema_update([1.0, 0.0], [0.0, 1.0], alpha=0.0)
+        assert out[0] == 1.0 and out[1] == 0.0
+
+
+class TestEmaRepel:
+    def test_result_is_normalized(self):
+        out = ema_repel([1.0, 0.0], [0.0, 1.0], alpha=0.2)
+        length = math.sqrt(sum(x * x for x in out))
+        assert abs(length - 1.0) < 1e-6
+
+    def test_moves_away_from_target(self):
+        # Pushing [1,0] away from [0,1] drives the 2nd component negative and
+        # lowers cosine similarity to the disliked target.
+        out = ema_repel([1.0, 0.0], [0.0, 1.0], alpha=0.3)
+        assert out[1] < 0.0
+        assert cosine_similarity(out, [0.0, 1.0]) < cosine_similarity([1.0, 0.0], [0.0, 1.0])
+
+    def test_alpha_zero_keeps_old_direction(self):
+        out = ema_repel([1.0, 0.0], [0.0, 1.0], alpha=0.0)
         assert out[0] == 1.0 and out[1] == 0.0
