@@ -4,6 +4,7 @@ import "./tokens.css";
 import { Analytics } from "@vercel/analytics/next";
 import { AuthProvider } from "@/lib/auth-context";
 import GuestGate from "@/components/GuestGate";
+import BottomNav from "@/components/BottomNav";
 import { Inter, Space_Grotesk } from "next/font/google";
 
 // Body/UI face — highly legible variable sans (consumed via --font-sans).
@@ -33,6 +34,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body className={`${inter.variable} ${displayFace.variable} bg-black text-white antialiased`}>
         <AuthProvider>
           {children}
+          <BottomNav />
           <GuestGate />
         </AuthProvider>
         <Analytics />

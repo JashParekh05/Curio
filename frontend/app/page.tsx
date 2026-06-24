@@ -77,7 +77,7 @@ export default function Home() {
   }
 
   return (
-    <main className="min-h-screen bg-canvas text-on-surface flex flex-col items-center px-6 py-10">
+    <main className="min-h-screen bg-canvas text-on-surface flex flex-col items-center px-6 pt-10 pb-28">
       <div className="w-full max-w-md flex flex-col gap-6">
         {/* Top bar */}
         <div className="flex items-center justify-between">
