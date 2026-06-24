@@ -21,7 +21,7 @@ import { Input } from "@/components/pop/Input";
 function LearnContent() {
   const router = useRouter();
   const params = useSearchParams();
-  const basic = params.get("mode") === "basic";
+  const [basic, setBasic] = useState(params.get("mode") === "basic");
   const { user, session, loading } = useAuth();
   const [query, setQuery] = useState("");
   const [building, setBuilding] = useState(false);
@@ -66,6 +66,24 @@ function LearnContent() {
           <Button variant="ghost" size="sm" onClick={() => router.push("/")}>
             Home
           </Button>
+        </div>
+
+        {/* Mode toggle — both Structured and Basic reachable from the Learn tab */}
+        <div className="flex rounded-pill bg-surface-alt p-1 border border-outline">
+          <button
+            type="button"
+            onClick={() => setBasic(false)}
+            className={`flex-1 rounded-pill py-2 text-sm font-semibold transition ${!basic ? "bg-primary text-on-primary shadow-elev-1" : "text-on-surface-muted hover:text-on-surface"}`}
+          >
+            Structured
+          </button>
+          <button
+            type="button"
+            onClick={() => setBasic(true)}
+            className={`flex-1 rounded-pill py-2 text-sm font-semibold transition ${basic ? "bg-primary text-on-primary shadow-elev-1" : "text-on-surface-muted hover:text-on-surface"}`}
+          >
+            Basic
+          </button>
         </div>
 
         {path ? (
