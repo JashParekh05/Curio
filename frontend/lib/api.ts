@@ -202,8 +202,11 @@ export interface DiscoverFeed {
   processing: boolean;
 }
 
-export async function getDiscoverFeed(userId: string, token: string): Promise<DiscoverFeed> {
-  const res = await fetch(`${API_BASE}/api/feed/discover/${encodeURIComponent(userId)}`, {
+export async function getDiscoverFeed(userId: string, token: string, excludeIds: string[] = []): Promise<DiscoverFeed> {
+  // Send already-seen clip ids (capped) so load-more never re-returns clips the
+  // user is already scrolling — their telemetry may not be flushed/written yet.
+  const exclude = excludeIds.length ? `?exclude=${encodeURIComponent(excludeIds.slice(-200).join(","))}` : "";
+  const res = await fetch(`${API_BASE}/api/feed/discover/${encodeURIComponent(userId)}${exclude}`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   if (!res.ok) return { clips: [], processing: false };
@@ -212,6 +215,31 @@ export async function getDiscoverFeed(userId: string, token: string): Promise<Di
   // older bare-array response shape just in case a stale backend is deployed.
   if (Array.isArray(data)) return { clips: data, processing: false };
   return { clips: data.clips ?? [], processing: Boolean(data.processing) };
+}
+
+// Server-side guest clip count (keyed on the anonymous auth user_id). Fail-open:
+// any error returns 0 so the client falls back to its localStorage counter.
+export async function getGuestProgress(token: string): Promise<number> {
+  try {
+    const res = await fetch(`${API_BASE}/api/feed/guest/progress`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return 0;
+    const data = await res.json();
+    return Number(data?.clips_watched) || 0;
+  } catch {
+    return 0;
+  }
+}
+
+// Fire-and-forget server increment; localStorage is the optimistic source and
+// the server is authoritative on reload (max(local, server)).
+export function incrementGuestProgress(token: string): void {
+  fetch(`${API_BASE}/api/feed/guest/increment`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+    keepalive: true,
+  }).catch(() => {});
 }
 
 export function recordClipEvent(

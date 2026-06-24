@@ -6,7 +6,7 @@ export const metadata: Metadata = {
   description: "How Curio collects, uses, and protects your data.",
 };
 
-// Generated starting draft — review with counsel before relying on it, and
+// Generated starting draft, review with counsel before relying on it, and
 // confirm every statement matches your real data practices. Update contact
 // addresses and add GDPR/CCPA-specific disclosures as your user base requires.
 export default function PrivacyPage() {
@@ -24,22 +24,22 @@ export default function PrivacyPage() {
         <p>We collect the following categories of information:</p>
         <ul className="list-disc pl-5 space-y-1">
           <li>
-            <span className="font-bold">Account information</span> — such as your
+            <span className="font-bold">Account information</span>, such as your
             email address, provided through our authentication provider when you
             sign up or sign in.
           </li>
           <li>
-            <span className="font-bold">Learning activity</span> — the topics you
+            <span className="font-bold">Learning activity</span>, the topics you
             search, the learning paths generated for you, the clips served to
             you, watch and skip events, replays, and quiz answers.
           </li>
           <li>
-            <span className="font-bold">Derived signals</span> — interest and
+            <span className="font-bold">Derived signals</span>, interest and
             taste profiles we compute from your activity to personalize and rank
             your feed.
           </li>
           <li>
-            <span className="font-bold">Device & usage data</span> — basic
+            <span className="font-bold">Device & usage data</span>, basic
             technical information such as browser type, device, and interactions,
             collected to operate and improve the Service.
           </li>
@@ -118,7 +118,7 @@ export default function PrivacyPage() {
           children under 13. We do not knowingly collect personal information
           from children under 13. If you believe a child has provided us personal
           information, contact us and we will take appropriate steps to delete it.
-          [If you intend to serve children, additional COPPA obligations apply —
+          [If you intend to serve children, additional COPPA obligations apply,
           confirm with counsel.]
         </p>
       </LegalSection>

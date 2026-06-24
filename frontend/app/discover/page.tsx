@@ -35,14 +35,29 @@ export default function DiscoverPage() {
   sessionTokenRef.current = session?.access_token ?? "";
   isGuestRef.current = isGuest;
 
+  // Record clip ids as seen (in-session dedupe) and BOUND the set so a long
+  // session can't grow it unbounded — the most-recent ids are kept (Set is
+  // insertion-ordered) and also sent to the backend as `exclude` so load-more
+  // never re-returns clips already on screen.
+  const markSeen = useCallback((ids: string[]) => {
+    const s = seenClipIdsRef.current;
+    for (const id of ids) s.add(id);
+    if (s.size > 500) seenClipIdsRef.current = new Set(Array.from(s).slice(-300));
+  }, []);
+
+  // Load the feed exactly ONCE per signed-in user. Keyed on the primitive
+  // user id (not the session/user objects) and guarded by a ref, so Supabase
+  // re-emitting auth events (tab focus, token refresh) can never re-run this
+  // and swap the clips array out from under an in-progress scroll.
+  const feedLoadedForRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!user || !session) return;
-    const token = session.access_token;
+    if (!user || feedLoadedForRef.current === user.id) return;
+    feedLoadedForRef.current = user.id;
 
     function doFetch() {
-      getDiscoverFeed(user!.id, token).then(({ clips: c, processing }) => {
+      getDiscoverFeed(user!.id, sessionTokenRef.current, Array.from(seenClipIdsRef.current)).then(({ clips: c, processing }) => {
         const fresh = c.filter((clip) => !seenClipIdsRef.current.has(clip.id));
-        fresh.forEach((clip) => seenClipIdsRef.current.add(clip.id));
+        markSeen(fresh.map((cl) => cl.id));
         if (fresh.length > 0) {
           setClips(fresh);
           setFetching(false);
@@ -76,7 +91,7 @@ export default function DiscoverPage() {
       clearInterval(pollRef.current);
       clearTimeout(coldStartTimeoutRef.current);
     };
-  }, [user, session]);
+  }, [user?.id]);
 
   const goTo = useCallback((idx: number) => {
     const clamped = Math.max(0, Math.min(clipsRef.current.length - 1, idx));
@@ -148,17 +163,17 @@ export default function DiscoverPage() {
 
   // Auto-load more when 2 from the end
   useEffect(() => {
-    if (!user || !session || clips.length === 0 || activeIndex < clips.length - 2) return;
+    if (!user || clips.length === 0 || activeIndex < clips.length - 2) return;
     if (fetchingMoreRef.current) return;
     fetchingMoreRef.current = true;
-    getDiscoverFeed(user.id, session.access_token)
+    getDiscoverFeed(user.id, sessionTokenRef.current, Array.from(seenClipIdsRef.current))
       .then((more) => {
         const fresh = more.clips.filter((clip) => !seenClipIdsRef.current.has(clip.id));
-        fresh.forEach((clip) => seenClipIdsRef.current.add(clip.id));
+        markSeen(fresh.map((cl) => cl.id));
         setClips((prev) => [...prev, ...fresh]);
       })
       .finally(() => { fetchingMoreRef.current = false; });
-  }, [activeIndex, clips.length, user, session]);
+  }, [activeIndex, clips.length, user?.id]);
 
   // Stable IntersectionObserver — created once, re-observes new clips as count grows
   const observerRef = useRef<IntersectionObserver | null>(null);
@@ -215,32 +230,39 @@ export default function DiscoverPage() {
 
   const readyToast = readySession ? (
     <div className="absolute bottom-8 inset-x-4 z-30 flex justify-center">
-      <div className="brutal flex items-center gap-3 bg-accent-yellow text-ink px-4 py-3 shadow-brutal">
+      <div className="flex items-center gap-3 rounded-pill bg-primary text-on-primary px-4 py-3 shadow-elev-2">
         <button
           onClick={() => router.push(`/feed?session=${readySession}`)}
-          className="text-sm font-bold"
+          className="text-sm font-semibold"
         >
-          Your learning path is ready
+          Your learning path is ready →
         </button>
         <button
           onClick={() => setReadySession(null)}
-          className="text-ink/60 hover:text-ink text-xs font-black leading-none"
+          className="opacity-70 hover:opacity-100 text-sm leading-none"
           aria-label="Dismiss"
         >
-          X
+          ✕
         </button>
       </div>
     </div>
   ) : null;
 
+  const homeButton = (
+    <button
+      onClick={() => router.push("/")}
+      className="absolute top-4 left-4 rounded-pill bg-surface-alt text-on-surface text-sm font-semibold px-4 py-2 shadow-elev-1 transition hover:brightness-95"
+    >
+      Home
+    </button>
+  );
+
   if (fetching) {
     return (
-      <div className="fixed inset-0 bg-paper flex flex-col items-center justify-center gap-5 text-ink">
-        <button onClick={() => router.push("/")} className="brutal-btn bg-white text-ink absolute top-4 left-4 text-sm px-3 py-2">
-          Home
-        </button>
-        <div className="w-12 h-12 border-[3px] border-ink border-t-accent-pink rounded-full animate-spin" />
-        <p className="text-ink/60 text-sm font-bold">Loading your feed</p>
+      <div className="fixed inset-0 bg-canvas flex flex-col items-center justify-center gap-5 text-on-surface">
+        {homeButton}
+        <div className="w-10 h-10 border-[3px] border-outline border-t-primary rounded-full animate-spin" />
+        <p className="text-on-surface-muted text-sm font-medium">Loading your feed…</p>
         {readyToast}
       </div>
     );
@@ -249,28 +271,24 @@ export default function DiscoverPage() {
   if (clips.length === 0) {
     if (coldStartTimedOut) {
       return (
-        <div className="fixed inset-0 bg-paper flex flex-col items-center justify-center gap-5 text-ink px-6">
-          <button onClick={() => router.push("/")} className="brutal-btn bg-white text-ink absolute top-4 left-4 text-sm px-3 py-2">
-            Home
-          </button>
-          <p className="text-3xl font-black text-center">Nothing to discover yet</p>
-          <p className="text-ink/60 text-sm text-center font-medium">Try learning a few topics first — we'll find more content for you.</p>
-          <button onClick={() => router.push("/")} className="brutal-btn bg-accent-yellow text-ink px-6 py-3 text-sm">
-            Start learning
+        <div className="fixed inset-0 bg-canvas flex flex-col items-center justify-center gap-4 text-on-surface px-6">
+          {homeButton}
+          <p className="font-display text-2xl font-extrabold text-center">Nothing to discover yet</p>
+          <p className="text-on-surface-muted text-sm text-center">Tell us a topic and we&apos;ll find clips for you.</p>
+          <button onClick={() => router.push("/")} className="rounded-pill bg-primary text-on-primary px-6 py-3 text-sm font-semibold shadow-elev-1 transition hover:brightness-[1.03]">
+            Start your feed
           </button>
           {readyToast}
         </div>
       );
     }
     return (
-      <div className="fixed inset-0 bg-paper flex flex-col items-center justify-center gap-5 text-ink">
-        <button onClick={() => router.push("/")} className="brutal-btn bg-white text-ink absolute top-4 left-4 text-sm px-3 py-2">
-          Home
-        </button>
-        <div className="w-12 h-12 border-[3px] border-ink border-t-accent-pink rounded-full animate-spin" />
+      <div className="fixed inset-0 bg-canvas flex flex-col items-center justify-center gap-5 text-on-surface">
+        {homeButton}
+        <div className="w-10 h-10 border-[3px] border-outline border-t-primary rounded-full animate-spin" />
         <div className="text-center space-y-1">
-          <p className="text-ink font-extrabold">Building your feed</p>
-          <p className="text-ink/60 text-sm font-medium">Finding clips for your interests</p>
+          <p className="font-display font-extrabold">Building your feed</p>
+          <p className="text-on-surface-muted text-sm">Finding clips for your interests</p>
         </div>
         {readyToast}
       </div>
@@ -279,24 +297,32 @@ export default function DiscoverPage() {
 
   return (
     <div className="fixed inset-0 bg-black">
-      {/* HUD */}
-      <div className="absolute top-0 inset-x-0 z-20 flex items-center justify-between px-4 pt-4 pb-2 pointer-events-none">
-        <button
-          onClick={() => router.push("/")}
-          className="pointer-events-auto brutal-dark-btn bg-ink text-white font-bold px-3 py-1.5 text-sm leading-none"
-        >
-          Home
-        </button>
-        <span className="brutal-dark bg-accent-orange text-ink text-xs font-bold tracking-wide px-2 py-1">Discover</span>
-        <span className="text-white text-xs tabular-nums flex items-center gap-2 pointer-events-auto">
-          <span className="brutal-dark bg-ink px-2 py-1 font-bold">{activeIndex + 1} / {clips.length}</span>
+      {/* Progress bar */}
+      <div className="absolute top-0 inset-x-0 z-30 h-1 bg-white/20">
+        <div
+          className="h-full bg-primary transition-all duration-300"
+          style={{ width: `${((activeIndex + 1) / clips.length) * 100}%` }}
+        />
+      </div>
+
+      {/* HUD — glassy chrome over the video, pushed below the embed's top bar */}
+      <div className="absolute top-0 inset-x-0 z-20 flex items-center justify-between px-4 pt-12 pb-2 pointer-events-none">
+        <span className="rounded-pill bg-black/40 backdrop-blur-sm text-white text-xs font-semibold px-3 py-1.5 tabular-nums pointer-events-auto">{activeIndex + 1} / {clips.length}</span>
+        <span className="flex items-center gap-2 pointer-events-auto">
           <button
-            onClick={handleShare}
-            className="brutal-dark-btn bg-accent-cyan text-ink font-bold px-3 py-1.5 text-xs leading-none"
+            onClick={() => router.push("/")}
+            className="rounded-pill bg-black/40 backdrop-blur-sm text-white font-semibold px-4 py-2 text-sm leading-none transition hover:bg-black/55"
           >
-            Share
+            Home
           </button>
+          <span className="rounded-pill bg-black/40 backdrop-blur-sm text-white text-xs font-bold tracking-wide px-3 py-1.5">Discover</span>
         </span>
+        <button
+          onClick={handleShare}
+          className="rounded-pill bg-primary text-on-primary font-semibold px-3 py-1.5 text-xs leading-none shadow-elev-1 transition hover:brightness-[1.05] pointer-events-auto"
+        >
+          Share
+        </button>
       </div>
 
       {/* Nav arrows */}
@@ -305,17 +331,17 @@ export default function DiscoverPage() {
           onClick={() => goTo(activeIndex - 1)}
           disabled={activeIndex === 0}
           aria-label="Previous clip"
-          className="brutal-dark-btn bg-ink w-9 h-9 flex items-center justify-center text-white font-black disabled:opacity-20 disabled:translate-x-0 disabled:translate-y-0 disabled:shadow-brutal-white"
+          className="rounded-pill bg-black/40 backdrop-blur-sm w-10 h-10 flex items-center justify-center text-white text-lg transition hover:bg-black/55 disabled:opacity-20"
         >
-          ^
+          ↑
         </button>
         <button
           onClick={() => goTo(activeIndex + 1)}
           disabled={activeIndex >= clips.length - 1}
           aria-label="Next clip"
-          className="brutal-dark-btn bg-ink w-9 h-9 flex items-center justify-center text-white font-black disabled:opacity-20 disabled:translate-x-0 disabled:translate-y-0 disabled:shadow-brutal-white"
+          className="rounded-pill bg-black/40 backdrop-blur-sm w-10 h-10 flex items-center justify-center text-white text-lg transition hover:bg-black/55 disabled:opacity-20"
         >
-          v
+          ↓
         </button>
       </div>
 
@@ -324,19 +350,11 @@ export default function DiscoverPage() {
 
       {shareToast && (
         <div className="absolute bottom-8 inset-x-0 z-40 flex justify-center pointer-events-none">
-          <div className="brutal bg-accent-yellow text-ink text-sm font-bold px-4 py-2 shadow-brutal">
+          <div className="rounded-pill bg-on-surface text-canvas text-sm font-semibold px-4 py-2 shadow-elev-2">
             {shareToast}
           </div>
         </div>
       )}
-
-      {/* Progress bar */}
-      <div className="absolute top-0 inset-x-0 z-30 h-1 bg-ink">
-        <div
-          className="h-full bg-accent-lime transition-all duration-300"
-          style={{ width: `${((activeIndex + 1) / clips.length) * 100}%` }}
-        />
-      </div>
 
       {/* Scroll container */}
       <div ref={containerRef} className="h-full overflow-y-scroll snap-y snap-mandatory" style={{ scrollbarWidth: "none" }}>
@@ -348,6 +366,7 @@ export default function DiscoverPage() {
                 mode="active"
                 onEnded={() => goTo(i + 1)}
                 onFeedback={(type) => recordClipEvent(clip.id, 0, false, null, 0, type, sessionTokenRef.current)}
+                onLearnThis={() => router.push(`/feed?topic=${encodeURIComponent(clip.topic_slug)}`)}
               />
             ) : null}
           </div>
@@ -355,12 +374,12 @@ export default function DiscoverPage() {
 
         {/* End card */}
         <div className="snap-start snap-always" style={{ height: "100dvh" }}>
-          <div className="h-full flex flex-col items-center justify-center gap-5 bg-paper text-ink px-6">
-            <p className="text-3xl font-black text-center">You&apos;re all caught up</p>
-            <p className="text-ink/60 text-sm text-center font-medium">Want to go deeper on something?</p>
+          <div className="h-full flex flex-col items-center justify-center gap-5 bg-canvas text-on-surface px-6">
+            <p className="font-display text-3xl font-extrabold text-center">You&apos;re all caught up</p>
+            <p className="text-on-surface-muted text-sm text-center">Want to go deeper on something?</p>
             <button
               onClick={() => router.push("/")}
-              className="brutal-btn bg-accent-yellow text-ink px-6 py-3 text-sm"
+              className="rounded-pill bg-primary text-on-primary px-6 py-3 text-sm font-semibold shadow-elev-1 transition hover:brightness-[1.03]"
             >
               Learn something specific
             </button>
@@ -369,17 +388,17 @@ export default function DiscoverPage() {
               onClick={() => {
                 if (!user || !session || loadingMore) return;
                 setLoadingMore(true);
-                getDiscoverFeed(user.id, session.access_token)
+                getDiscoverFeed(user.id, session.access_token, Array.from(seenClipIdsRef.current))
                   .then((more) => {
                     const fresh = more.clips.filter((clip) => !seenClipIdsRef.current.has(clip.id));
-                    fresh.forEach((clip) => seenClipIdsRef.current.add(clip.id));
+                    markSeen(fresh.map((cl) => cl.id));
                     setClips((prev) => [...prev, ...fresh]);
                   })
                   .finally(() => setLoadingMore(false));
               }}
-              className="brutal-btn bg-white text-ink px-5 py-2.5 text-sm disabled:opacity-40"
+              className="rounded-pill bg-surface-alt text-on-surface px-5 py-2.5 text-sm font-semibold border border-outline transition hover:brightness-95 disabled:opacity-40"
             >
-              {loadingMore ? "Loading" : "Load more clips"}
+              {loadingMore ? "Loading…" : "Load more clips"}
             </button>
           </div>
         </div>

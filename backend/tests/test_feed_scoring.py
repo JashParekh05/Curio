@@ -4,6 +4,7 @@ from app.services.feed_scoring import (
     _transcript_boost,
     _interleave_topics,
     _spread_by_source,
+    _diversify_by_topic,
     LEARN_WEIGHTS,
     DISCOVER_WEIGHTS,
 )
@@ -90,6 +91,38 @@ class TestSpreadBySource:
     def test_single_clip_unchanged(self):
         clips = [make_clip(source_url="A")]
         assert _spread_by_source(clips) == clips
+
+
+class TestDiversifyByTopic:
+    def test_breaks_up_same_topic_clump(self):
+        # The reported bug: 5 "westward-expansion" clips clumped at the top by
+        # score, with only a couple of other topics available.
+        clips = (
+            [make_clip(topic_slug="westward-expansion") for _ in range(5)]
+            + [make_clip(topic_slug="photosynthesis")]
+            + [make_clip(topic_slug="world-war-2")]
+        )
+        out = _diversify_by_topic(clips)
+        topics = [c.topic_slug for c in out]
+        # Nothing dropped.
+        assert {c.id for c in out} == {c.id for c in clips}
+        # The minority topics are pulled up to break the run, not stranded at
+        # the end — both appear within the first four slots.
+        assert "photosynthesis" in topics[:4]
+        assert "world-war-2" in topics[:4]
+        # No two same-topic neighbors while alternatives still remained.
+        assert all(topics[i] != topics[i + 1] for i in range(3))
+
+    def test_balanced_topics_alternate(self):
+        clips = [make_clip(topic_slug="a") for _ in range(3)] + [
+            make_clip(topic_slug="b") for _ in range(3)
+        ]
+        topics = [c.topic_slug for c in _diversify_by_topic(clips)]
+        assert all(topics[i] != topics[i + 1] for i in range(len(topics) - 1))
+
+    def test_short_list_unchanged(self):
+        clips = [make_clip(topic_slug="a"), make_clip(topic_slug="a")]
+        assert _diversify_by_topic(clips) == clips
 
 
 class TestInterleaveTopics:

@@ -118,15 +118,15 @@ describe("RetroThemeProvider CRT toggle persistence (Req 1.3, 12.2)", () => {
       </RetroThemeProvider>,
     );
 
-    // Default: CRT on for the arcade look, nothing persisted yet.
-    expect(screen.getByTestId("crt").textContent).toBe("true");
-    expect(retroRoot().getAttribute("data-crt")).toBe("true");
+    // Default: CRT OFF (the overlay washed out the page); nothing persisted yet.
+    expect(screen.getByTestId("crt").textContent).toBe("false");
+    expect(retroRoot().getAttribute("data-crt")).toBe("false");
 
     fireEvent.click(screen.getByTestId("toggle-crt"));
 
-    expect(screen.getByTestId("crt").textContent).toBe("false");
-    expect(retroRoot().getAttribute("data-crt")).toBe("false");
-    expect(readPersisted()).toEqual({ crtOn: false, audioOn: false });
+    expect(screen.getByTestId("crt").textContent).toBe("true");
+    expect(retroRoot().getAttribute("data-crt")).toBe("true");
+    expect(readPersisted()).toEqual({ crtOn: true, audioOn: false });
   });
 });
 
@@ -143,8 +143,8 @@ describe("Property 3: retro chrome state matches persistence across any toggle s
             </RetroThemeProvider>,
           );
           try {
-            // Provider defaults: CRT on, audio muted (Req 16.2).
-            let expectedCrt = true;
+            // Provider defaults: CRT off, audio muted (Req 16.2).
+            let expectedCrt = false;
             let expectedAudio = false;
 
             for (const cmd of cmds) {

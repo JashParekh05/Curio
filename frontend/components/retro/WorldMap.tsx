@@ -353,24 +353,37 @@ export default function WorldMap({
       role="img"
       style={{
         background:
-          "linear-gradient(180deg, var(--pq-biome-sky) 0%, var(--pq-biome-candyland) 30%, var(--pq-biome-forest) 70%, var(--pq-biome-keep) 100%)",
+          "linear-gradient(180deg, #7ec7f0 0%, #aee0f2 36%, #dff0c4 50%, #79c46f 66%, #4f9f5a 100%)",
         border: "4px solid var(--pq-ink)",
         boxShadow: "0 0 0 4px var(--pq-panel)",
         padding: "1.25rem 1rem 1.5rem",
+        minHeight: "300px",
       }}
     >
-      {/* Chunky pixel-grass tile texture layer under the winding trail. Pointer
-          events disabled so the Stages above stay interactive. */}
-      <div
-        aria-hidden
-        className="pixelated pointer-events-none absolute inset-0"
-        style={{
-          backgroundImage:
-            "repeating-linear-gradient(0deg, rgba(26,20,38,0.10) 0 8px, transparent 8px 16px)," +
-            "repeating-linear-gradient(90deg, rgba(26,20,38,0.10) 0 8px, transparent 8px 16px)",
-          opacity: 0.5,
-        }}
-      />
+      {/* Layered pixel scenery (research: depth via layering + a limited
+          palette): a sun, drifting clouds, a dithered horizon, and chunky grass
+          — replaces the flat gradient with a real overworld backdrop. All
+          aria-hidden + pointer-events-none so the trail above stays interactive. */}
+      <div aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden">
+        {/* sun */}
+        <div
+          className="pixelated"
+          style={{ position: "absolute", top: 14, right: 22, width: 44, height: 44, borderRadius: "50%", background: "#ffe169", border: "3px solid var(--pq-ink)", boxShadow: "0 0 0 6px rgba(255,225,105,0.30)" }}
+        />
+        {/* clouds */}
+        <div className="pixelated" style={{ position: "absolute", top: 28, left: "16%", width: 66, height: 16, background: "#ffffff", border: "3px solid var(--pq-ink)", opacity: 0.9 }} />
+        <div className="pixelated" style={{ position: "absolute", top: 58, left: "52%", width: 50, height: 14, background: "#ffffff", border: "3px solid var(--pq-ink)", opacity: 0.75 }} />
+        {/* dithered horizon band where sky meets land */}
+        <div
+          className="pixelated"
+          style={{ position: "absolute", left: 0, right: 0, top: "48%", height: 18, backgroundImage: "repeating-linear-gradient(90deg, rgba(26,20,38,0.18) 0 6px, transparent 6px 12px)", opacity: 0.6 }}
+        />
+        {/* chunky grass dither along the ground */}
+        <div
+          className="pixelated"
+          style={{ position: "absolute", left: 0, right: 0, bottom: 0, height: "34%", backgroundImage: "repeating-linear-gradient(0deg, rgba(26,20,38,0.12) 0 6px, transparent 6px 12px), repeating-linear-gradient(90deg, rgba(26,20,38,0.10) 0 6px, transparent 6px 12px)", opacity: 0.5 }}
+        />
+      </div>
 
       {/* Overworld title bar. */}
       <div className="relative mb-5 flex items-center justify-between gap-2">
@@ -478,7 +491,7 @@ export default function WorldMap({
                     data-walking={animating && !descentDone ? "true" : "false"}
                     style={{ marginBottom: "0.35rem", lineHeight: 1 }}
                   >
-                    <Knight walking={animating && !descentDone} />
+                    <Knight walking={animating && !descentDone} size={56} />
                   </div>
                 )}
 

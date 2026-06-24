@@ -1,0 +1,109 @@
+/*
+ * Curio design tokens — "Friendly Pop" direction (Phase 0).
+ *
+ * PURE PLUMBING: this sheet only declares design tokens as CSS custom
+ * properties on :root (+ a dark theme). NOTHING consumes them yet, so importing
+ * it produces ZERO visual change. Phase 1 restyles the shared primitives
+ * (Button/Card/Input/tab bar/streak chip) to consume these, at which point the
+ * whole app modernizes in one sweep.
+ *
+ * Direction: warm, rounded, saturated and playful ("Friendly Pop"), but
+ * disciplined and accessible. Color pairs target WCAG AA (4.5:1 body / 3:1
+ * large+UI); spacing is an 8pt grid; corners are rounded; depth comes from soft
+ * elevation rather than hard borders. Sources informing these choices: Material 3
+ * (type/color roles, 8pt), Apple HIG (Dynamic Type, 44pt targets), WCAG 2.2.
+ */
+
+:root {
+  /* ---- Brand & accent (Friendly Pop: warm, saturated, playful) ---- */
+  --color-primary: #6c4bf4;        /* vibrant violet — the brand action color */
+  --color-primary-press: #5a3ce0;  /* pressed/active state */
+  --color-on-primary: #ffffff;
+  --color-secondary: #ff5c8a;      /* coral pink — playful secondary */
+  --color-on-secondary: #ffffff;
+  --color-accent: #ffc93c;         /* sunny yellow — highlights / rewards */
+  --color-on-accent: #2a2113;
+
+  /* ---- Semantic status ---- */
+  --color-success: #2fae6b;        /* correct answer / cleared */
+  --color-warning: #ff9f1c;
+  --color-danger: #ef4565;         /* wrong answer / destructive */
+
+  /* ---- Surfaces & text ---- */
+  --color-bg: #fbf7f2;             /* warm off-white page canvas */
+  --color-surface: #ffffff;        /* cards / sheets */
+  --color-surface-alt: #f3eefa;    /* tinted card / subtle fill */
+  --color-on-surface: #1b1530;     /* primary text (AA on surface) */
+  --color-on-surface-muted: #645d7a; /* secondary text (AA on surface) */
+  --color-outline: #e7e0f0;        /* hairline borders / dividers */
+
+  /* ---- Radius (rounded = friendly) ---- */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+  --radius-pill: 999px;
+
+  /* ---- Spacing (8pt grid; 4pt for fine adjustments) ---- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+
+  /* ---- Elevation (soft shadows replace hard brutalist borders) ---- */
+  --elev-1: 0 1px 2px rgba(27, 21, 48, 0.08), 0 1px 3px rgba(27, 21, 48, 0.06);
+  --elev-2: 0 2px 6px rgba(27, 21, 48, 0.10), 0 4px 12px rgba(27, 21, 48, 0.08);
+  --elev-3: 0 8px 24px rgba(27, 21, 48, 0.14);
+
+  /* ---- Typography ----
+     Body/UI uses a legible variable sans (Press Start 2P is retired from body
+     text in Phase 1). A rounded display face is reserved for headings + big
+     numbers; it is wired via next/font in Phase 1, with a graceful fallback. */
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-display: var(--font-display-face), var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+
+  --text-xs: 0.75rem;   --leading-xs: 1.1rem;
+  --text-sm: 0.875rem;  --leading-sm: 1.3rem;
+  --text-base: 1rem;    --leading-base: 1.55rem;
+  --text-lg: 1.125rem;  --leading-lg: 1.65rem;
+  --text-xl: 1.375rem;  --leading-xl: 1.85rem;
+  --text-2xl: 1.75rem;  --leading-2xl: 2.1rem;
+  --text-3xl: 2.25rem;  --leading-3xl: 2.6rem;
+
+  /* ---- Motion (purposeful, fast; components gate on prefers-reduced-motion) ---- */
+  --dur-fast: 150ms;
+  --dur-base: 220ms;
+  --dur-slow: 320ms;
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-in-out: cubic-bezier(0.45, 0, 0.2, 1);
+}
+
+/* Dark theme — opt-in via [data-theme="dark"] (the switch is wired in Phase 3,
+   so this has no effect until then). A first-class theme, not an inversion. */
+[data-theme="dark"] {
+  --color-primary: #8b73ff;
+  --color-primary-press: #7a61f0;
+  --color-on-primary: #15121f;
+  --color-secondary: #ff7aa3;
+  --color-on-secondary: #15121f;
+  --color-accent: #ffd45e;
+  --color-on-accent: #2a2113;
+
+  --color-success: #4cd08a;
+  --color-warning: #ffb14d;
+  --color-danger: #ff6b85;
+
+  --color-bg: #15121f;
+  --color-surface: #1e1a2b;
+  --color-surface-alt: #272235;
+  --color-on-surface: #f4f1fa;
+  --color-on-surface-muted: #a89fc0;
+  --color-outline: #322c45;
+
+  --elev-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --elev-2: 0 4px 12px rgba(0, 0, 0, 0.5);
+  --elev-3: 0 10px 28px rgba(0, 0, 0, 0.6);
+}

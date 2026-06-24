@@ -31,6 +31,8 @@ from app.services.discover_seeding import (
     _interest_seed_slugs,
     _match_interest_slugs,
     _seed_topics_bg,
+    select_topup_topics,
+    _topup_discover_fresh,
     _GRADE_DIFFICULTY,
 )
 from app.services.path_extension import _should_extend, _extend_path, _LOW_CLIPS_THRESHOLD
@@ -614,9 +616,11 @@ async def get_feed(
 
 
 @router.get("/discover/{user_id}", response_model=DiscoverResponse)
-async def get_discover_feed(user_id: str, background_tasks: BackgroundTasks, limit: int = Query(20, le=50), caller_id: str = Depends(require_user)):
-    if caller_id != user_id:
-        raise HTTPException(status_code=403, detail="Access denied")
+async def get_discover_feed(user_id: str, background_tasks: BackgroundTasks, limit: int = Query(20, le=50), exclude: str | None = None, caller_id: str = Depends(require_user)):
+    # Trust the authenticated caller as the source of truth; never 403 on a
+    # path-param mismatch (which silently broke the feed for anonymous/guest
+    # sessions whose token sub differs from a stale path param). Self-lookup only.
+    user_id = caller_id
     db = get_client()
 
     # Single query: user profile with accumulated vectors
@@ -659,6 +663,11 @@ async def get_discover_feed(user_id: str, background_tasks: BackgroundTasks, lim
     except Exception as e:
         logger.warning(f"[feed] Failed to build seen_ids for user={user_id}: {e}")
 
+    # Merge client-known in-session clip ids so successive load-more calls never
+    # re-return clips already on screen (their telemetry may not be flushed yet).
+    if exclude:
+        seen_ids.update(cid for cid in exclude.split(",") if cid)
+
     try:
         all_topics = db.table("topics").select("slug").execute()
         all_slugs = [t["slug"] for t in all_topics.data]
@@ -679,6 +688,20 @@ async def get_discover_feed(user_id: str, background_tasks: BackgroundTasks, lim
     relevant_slugs = _match_interest_slugs(interests, candidate_slugs, taste_vector=taste_vector)
 
     clips = _fetch_discover_clips(db, relevant_slugs, candidate_slugs, seen_ids, limit, interest_vector=user_interest_vector, taste_vector=taste_vector)
+
+    # Signal-driven fresh generation (rides the fail-closed multi-project quota
+    # pool): top up the user's top taste-ranked topics with NEW clips from fresh
+    # searches, so Discover keeps feeling fresh instead of recycling the library.
+    # Gated on interests (like the seed top-up) so we never spend quota without a
+    # signal; WHICH topics is taste-ranked, re-targeting as the vectors move.
+    # Aggressiveness knobs: 4 topics x 2 distinct angles = up to 8 fresh searches
+    # per load (quota-bounded; fails closed when the day's pool is spent).
+    if interests:
+        topup_slugs = select_topup_topics(relevant_slugs, user_interest_vector, max_topics=4)
+        if topup_slugs:
+            background_tasks.add_task(
+                _topup_discover_fresh, topup_slugs, _GRADE_DIFFICULTY.get(grade_level, "intermediate"), 2
+            )
 
     # Level-aware ranking (stage 2): the user's exact Content_Level leads, with
     # below-level clips dropped while a match exists. rank_by_level is a stable
@@ -727,6 +750,33 @@ async def get_discover_feed(user_id: str, background_tasks: BackgroundTasks, lim
         user_id=user_id,
     )
     return DiscoverResponse(clips=clips, processing=len(clips) == 0)
+
+
+@router.get("/guest/progress")
+async def get_guest_progress(caller_id: str = Depends(require_user)):
+    """Server-side guest clip count for the signup gate, keyed on the
+    (anonymous) auth user_id. Fail-open: returns 0 if the table/RPC is absent so
+    the client falls back to its localStorage counter (migration_guest_progress.sql).
+    Two-segment path avoids the dynamic /{topic_slug} and /{clip_id}/events routes."""
+    db = get_client()
+    try:
+        res = db.table("guest_progress").select("clips_watched").eq("user_id", caller_id).limit(1).execute()
+        return {"clips_watched": (res.data[0]["clips_watched"] if res.data else 0)}
+    except Exception as e:
+        logger.warning(f"[feed] guest_progress read failed for {caller_id}: {e}")
+        return {"clips_watched": 0}
+
+
+@router.post("/guest/increment")
+async def increment_guest_progress(caller_id: str = Depends(require_user)):
+    """Atomically increment + return the caller's guest clip count. Fail-open."""
+    db = get_client()
+    try:
+        res = db.rpc("increment_guest_clips", {"p_user_id": caller_id}).execute()
+        return {"clips_watched": int(res.data) if res.data is not None else 0}
+    except Exception as e:
+        logger.warning(f"[feed] increment_guest_clips failed for {caller_id}: {e}")
+        return {"clips_watched": 0}
 
 
 @router.post("/{clip_id}/events", status_code=204)

@@ -81,7 +81,7 @@ describe("pointsFor scoring (preserved verbatim from SoftCheckpointCard)", () =>
   });
 });
 
-describe("QuizQuestionList brutalist option states (preserved verbatim)", () => {
+describe("QuizQuestionList option states (Friendly Pop)", () => {
   it("renders unanswered options as enabled with the neutral/hover state", () => {
     render(
       <QuizQuestionList questions={QUESTIONS} answers={{}} onAnswer={() => {}} />,
@@ -89,10 +89,10 @@ describe("QuizQuestionList brutalist option states (preserved verbatim)", () => 
 
     const opt = buttonFor(0, 0);
     expect(opt).toBeEnabled();
-    expect(opt.className).toContain("border-ink");
-    expect(opt.className).toContain("bg-white");
-    expect(opt.className).toContain("text-ink");
-    expect(opt.className).toContain("hover:bg-accent-yellow");
+    expect(opt.className).toContain("border-outline");
+    expect(opt.className).toContain("bg-surface");
+    expect(opt.className).toContain("text-on-surface");
+    expect(opt.className).toContain("hover:border-primary");
     // No explanation is shown until the question is answered.
     expect(screen.queryByText("Two plus two is four.")).toBeNull();
   });
@@ -114,17 +114,16 @@ describe("QuizQuestionList brutalist option states (preserved verbatim)", () => 
     const chosenWrong = buttonFor(0, 1); // chosen but wrong → pink
     const other = buttonFor(0, 2); // neither → dimmed
 
-    expect(correct.className).toContain("bg-accent-lime");
-    expect(correct.className).toContain("text-ink");
-    expect(correct.className).toContain("font-bold");
+    expect(correct.className).toContain("bg-success");
+    expect(correct.className).toContain("text-white");
+    expect(correct.className).toContain("font-semibold");
 
-    expect(chosenWrong.className).toContain("bg-accent-pink");
+    expect(chosenWrong.className).toContain("bg-danger");
     expect(chosenWrong.className).toContain("text-white");
-    expect(chosenWrong.className).toContain("font-bold");
+    expect(chosenWrong.className).toContain("font-semibold");
 
-    expect(other.className).toContain("border-ink/30");
-    expect(other.className).toContain("bg-white/40");
-    expect(other.className).toContain("text-ink/40");
+    expect(other.className).toContain("text-on-surface-muted");
+    expect(other.className).toContain("opacity-60");
 
     // Answered options are disabled and the explanation is revealed.
     expect(correct).toBeDisabled();
@@ -148,12 +147,12 @@ describe("QuizQuestionList brutalist option states (preserved verbatim)", () => 
     const otherA = buttonFor(0, 1);
     const otherB = buttonFor(0, 2);
 
-    expect(correct.className).toContain("bg-accent-lime");
-    // Non-correct options are dimmed, never pink, when the choice was right.
-    expect(otherA.className).toContain("text-ink/40");
-    expect(otherB.className).toContain("text-ink/40");
-    expect(otherA.className).not.toContain("bg-accent-pink");
-    expect(otherB.className).not.toContain("bg-accent-pink");
+    expect(correct.className).toContain("bg-success");
+    // Non-correct options are dimmed, never danger-colored, when the choice was right.
+    expect(otherA.className).toContain("text-on-surface-muted");
+    expect(otherB.className).toContain("text-on-surface-muted");
+    expect(otherA.className).not.toContain("bg-danger");
+    expect(otherB.className).not.toContain("bg-danger");
   });
 
   it("invokes onAnswer with the question and chosen option index", () => {

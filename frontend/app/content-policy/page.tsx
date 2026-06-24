@@ -6,7 +6,7 @@ export const metadata: Metadata = {
   description: "How Curio sources content and handles takedown requests.",
 };
 
-// Generated starting draft — review with counsel before relying on it. The
+// Generated starting draft, review with counsel before relying on it. The
 // copyright/DMCA section in particular should be confirmed against your real
 // process and, in the US, a registered DMCA agent.
 export default function ContentPolicyPage() {
@@ -15,7 +15,7 @@ export default function ContentPolicyPage() {
       <p>
         Curio links to and embeds short educational segments from third-party
         platforms. We do not host, store, download, or rebroadcast the
-        underlying media — we store only references (a source link plus start and
+        underlying media, we store only references (a source link plus start and
         end timestamps) and metadata we derive to organize the feed. This policy
         explains how content is sourced and how to report a concern.
       </p>
@@ -85,7 +85,7 @@ export default function ContentPolicyPage() {
         </p>
       </LegalSection>
 
-      <p className="text-ink/50 text-xs pt-2">
+      <p className="text-on-surface-muted text-xs pt-2">
         This document is provided for general informational purposes and is not
         legal advice.
       </p>

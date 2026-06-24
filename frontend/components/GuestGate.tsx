@@ -7,17 +7,20 @@ import {
   isGateDismissed,
   dismissGate,
   isHardGated,
+  syncGuestClips,
   GUEST_GATE_THRESHOLD,
   GUEST_CLIP_EVENT,
 } from "@/lib/guest-progress";
+import { getGuestProgress } from "@/lib/api";
 import UpgradeModal from "./UpgradeModal";
+import { Button } from "@/components/pop/Button";
 
 // Non-blocking soft signup gate + hard wall. Mounted once at the app root so it
 // covers every screen. After a few clips a guest sees a dismissible nudge banner;
 // after the hard limit, a non-dismissible modal blocks further watching until they
 // create an account. Their progress carries over (same user_id on upgrade).
 export default function GuestGate() {
-  const { isGuest } = useAuth();
+  const { isGuest, session } = useAuth();
   const [show, setShow] = useState(false);
   const [hardGated, setHardGated] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
@@ -34,11 +37,20 @@ export default function GuestGate() {
       setShow(!isGateDismissed() && clips >= GUEST_GATE_THRESHOLD);
     };
     evaluate();
+    // Reconcile with the server-authoritative count (keyed on the anon user_id)
+    // so clearing localStorage can't reset the gate, and it follows the identity
+    // across devices. syncGuestClips dispatches GUEST_CLIP_EVENT, which re-runs
+    // evaluate() via the listener below. Fail-open: a 0/error just keeps local.
+    if (session?.access_token) {
+      getGuestProgress(session.access_token)
+        .then((server) => syncGuestClips(server))
+        .catch(() => {});
+    }
     // The clip counter is bumped from telemetry (not React state); this event
     // lets the banner/wall appear the moment a threshold is crossed.
     window.addEventListener(GUEST_CLIP_EVENT, evaluate);
     return () => window.removeEventListener(GUEST_CLIP_EVENT, evaluate);
-  }, [isGuest]);
+  }, [isGuest, session?.access_token]);
 
   // Hard wall takes precedence over the dismissible banner.
   const showBanner = isGuest && show && !hardGated && !modalOpen;
@@ -48,26 +60,23 @@ export default function GuestGate() {
     <>
       {showBanner && (
         <div className="fixed bottom-4 inset-x-4 z-40 flex justify-center pointer-events-none">
-          <div className="pointer-events-auto brutal flex items-center gap-3 bg-accent-yellow text-ink px-4 py-3 shadow-brutal max-w-sm w-full">
+          <div className="pointer-events-auto flex items-center gap-3 bg-surface text-on-surface rounded-xl2 px-4 py-3 shadow-elev-3 max-w-sm w-full">
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-black">Save your progress</p>
-              <p className="text-xs text-ink/70 font-medium">Create a free account to keep your history.</p>
+              <p className="text-sm font-display font-extrabold">Save your progress</p>
+              <p className="text-xs text-on-surface-muted font-medium">Create a free account to keep your history.</p>
             </div>
-            <button
-              onClick={() => setModalOpen(true)}
-              className="brutal-btn bg-ink text-white text-sm px-3 py-2 shadow-brutal-sm shrink-0"
-            >
+            <Button size="sm" onClick={() => setModalOpen(true)} className="shrink-0">
               Sign up
-            </button>
+            </Button>
             <button
               onClick={() => {
                 dismissGate();
                 setShow(false);
               }}
               aria-label="Dismiss"
-              className="text-ink/60 hover:text-ink text-lg font-black leading-none shrink-0"
+              className="text-on-surface-muted hover:text-on-surface text-lg leading-none shrink-0 px-1"
             >
-              X
+              ✕
             </button>
           </div>
         </div>

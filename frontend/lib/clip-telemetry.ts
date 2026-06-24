@@ -1,7 +1,7 @@
 "use client";
 
 import type { MutableRefObject } from "react";
-import { recordClipEvent, type Clip } from "./api";
+import { recordClipEvent, incrementGuestProgress, type Clip } from "./api";
 import { incrementGuestClips } from "./guest-progress";
 
 export interface LastLogged {
@@ -38,5 +38,8 @@ export function flushClipEvent(opts: FlushOpts): void {
   recordClipEvent(clip.id, watchMs, watchMs >= durationMs * 0.8, sessionId, replayCount, feedback, token, keepalive);
   lastLoggedRef.current = { id: clip.id, at: startedAt };
 
-  if (isGuest) incrementGuestClips();
+  if (isGuest) {
+    incrementGuestClips();
+    incrementGuestProgress(token); // mirror to server (authoritative across reloads/devices)
+  }
 }

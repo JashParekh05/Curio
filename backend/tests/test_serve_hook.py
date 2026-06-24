@@ -138,17 +138,21 @@ class TestDiscoverServeHook:
         assert all(imp.session_id is None for imp in scheduled)
         assert all(imp.feed_surface == "discover" for imp in scheduled)
 
-    def test_discover_ownership_denied_records_nothing(self, monkeypatch):
-        # Discover is self-only: caller != user_id is rejected (403) before any
-        # serving or scheduling happens (Req 2.4).
+    def test_discover_uses_caller_not_path_user_id(self, monkeypatch):
+        # Discover is self-only by construction: the path user_id is IGNORED in
+        # favor of the authenticated caller, so a mismatched path param can never
+        # expose another user's feed (self-lookup, no 403 needed — Req 2.4).
         _patch_discover(monkeypatch, fetched_clips=[make_clip(id="c0")])
 
         bg = RecordingBackgroundTasks()
-        with pytest.raises(HTTPException) as exc:
-            asyncio.run(get_discover_feed("victim", bg, limit=20, caller_id="attacker"))
+        resp = asyncio.run(get_discover_feed("victim", bg, limit=20, caller_id="attacker"))
 
-        assert exc.value.status_code == 403
-        assert bg.tasks == []
+        assert isinstance(resp, DiscoverResponse)
+        scheduled = _scheduled_impressions(bg)
+        # Any scheduled impression is stamped with the CALLER, never the path param.
+        assert scheduled is not None
+        assert all(imp.user_id == "attacker" for imp in scheduled)
+        assert all(imp.user_id != "victim" for imp in scheduled)
 
 
 # --------------------------------------------------------------------------- #

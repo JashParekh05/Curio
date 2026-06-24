@@ -36,15 +36,11 @@ const STAGE_LABEL: Record<CheckpointStage, string> = {
 };
 
 /**
- * Inline soft checkpoint card. Reuses the "Test Yourself" quiz UI for a `check`
- * (between beats) or `post` (topic boundary) checkpoint, pulling questions by
- * `(topic_slug, stage, section_index)` from the existing quiz endpoint.
- *
- * Soft by construction: a "Skip" affordance is always visible and skipping or
- * dismissing never blocks anything — the parent (ReelPlayer, task 8.3) keeps the
- * scroll advancing regardless of this card's state. When the backend does not
- * yet support the `stage`/`section_index` query params (added in task 12.5), the
- * endpoint simply returns the topic-wide questions, which this card renders as-is.
+ * Inline soft checkpoint card (Friendly Pop). Reuses the "Test Yourself" quiz UI
+ * for a `check` (between beats) or `post` (topic boundary) checkpoint, pulling
+ * questions by `(topic_slug, stage, section_index)` from the existing quiz
+ * endpoint. Soft by construction: a "Skip" affordance is always visible and
+ * skipping never blocks — the parent keeps the scroll advancing regardless.
  */
 export default function SoftCheckpointCard({
   topicSlug,
@@ -116,31 +112,31 @@ export default function SoftCheckpointCard({
   const correctCount = Object.values(answers).filter((a) => a.correct).length;
 
   return (
-    <div className="brutal bg-paper shadow-brutal">
-      <div className="flex items-center justify-between gap-2 px-4 py-2.5 bg-accent-cyan border-b-[3px] border-ink">
+    <div className="bg-surface rounded-card border border-outline shadow-elev-2 overflow-hidden">
+      <div className="flex items-center justify-between gap-2 px-4 py-3 bg-surface-alt border-b border-outline">
         <div className="min-w-0">
-          <p className="text-ink/60 text-[10px] font-black tracking-wide">
+          <p className="text-on-surface-muted text-[10px] font-bold tracking-wide uppercase">
             {STAGE_LABEL[stage]}
           </p>
           {topicName && (
-            <p className="text-ink text-sm font-black truncate">{topicName}</p>
+            <p className="text-on-surface text-sm font-display font-bold truncate">{topicName}</p>
           )}
         </div>
         <div className="flex items-center gap-2 shrink-0">
           {streak > 1 && (
-            <span className="brutal bg-accent-orange text-ink font-bold text-xs px-2 py-0.5">
+            <span className="rounded-pill bg-warning text-on-accent font-semibold text-xs px-2 py-0.5">
               Streak {streak}
             </span>
           )}
           {scoreDelta > 0 && (
-            <span className="brutal bg-accent-yellow text-ink font-bold text-xs px-2 py-0.5 tabular-nums">
+            <span className="rounded-pill bg-success text-white font-semibold text-xs px-2 py-0.5 tabular-nums">
               +{scoreDelta}
             </span>
           )}
           {/* Soft invariant: skipping is always available and never blocks. */}
           <button
             onClick={onSkip}
-            className="brutal-btn bg-white text-ink font-black text-xs px-2.5 h-7 flex items-center justify-center shadow-brutal-sm"
+            className="rounded-pill bg-surface text-on-surface border border-outline font-semibold text-xs px-3 h-7 flex items-center justify-center transition hover:brightness-95"
             aria-label="Skip checkpoint"
           >
             Skip
@@ -150,15 +146,15 @@ export default function SoftCheckpointCard({
 
       <div className="px-4 py-3">
         {loading ? (
-          <p className="text-ink/50 text-xs font-medium">Building your quiz...</p>
+          <p className="text-on-surface-muted text-xs font-medium">Building your quiz...</p>
         ) : questions.length === 0 ? (
           <div className="space-y-2">
-            <p className="text-ink/50 text-xs font-medium">
+            <p className="text-on-surface-muted text-xs font-medium">
               No checkpoint questions yet.
             </p>
             <button
               onClick={onSkip}
-              className="brutal-btn bg-accent-lime text-ink font-black text-xs px-3 h-8 shadow-brutal-sm"
+              className="rounded-pill bg-primary text-on-primary font-semibold text-xs px-4 h-8 shadow-elev-1 transition hover:brightness-[1.05]"
             >
               Keep watching
             </button>
@@ -171,12 +167,12 @@ export default function SoftCheckpointCard({
               onAnswer={answer}
             />
             <div className="flex items-center justify-between gap-2 mt-3">
-              <span className="text-ink/60 text-xs font-bold tabular-nums">
+              <span className="text-on-surface-muted text-xs font-semibold tabular-nums">
                 {correctCount}/{questions.length} correct
               </span>
               <button
                 onClick={onSkip}
-                className="brutal-btn bg-accent-lime text-ink font-black text-xs px-3 h-8 shadow-brutal-sm"
+                className="rounded-pill bg-primary text-on-primary font-semibold text-xs px-4 h-8 shadow-elev-1 transition hover:brightness-[1.05]"
               >
                 {answeredCount >= questions.length ? "Continue" : "Skip for now"}
               </button>

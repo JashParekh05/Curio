@@ -32,6 +32,22 @@ export function incrementGuestClips(): number {
   return next;
 }
 
+// Reconcile the local counter UP to the server-authoritative count (keyed on the
+// anonymous user_id) so clearing localStorage / using a new device can't reset
+// the gate. Bumps localStorage + dispatches the event so a mounted GuestGate
+// re-evaluates. No-op when the server count is lower (local optimistic wins).
+export function syncGuestClips(serverCount: number): number {
+  if (typeof window === "undefined") return serverCount || 0;
+  const merged = Math.max(getGuestClips(), serverCount || 0);
+  try {
+    localStorage.setItem(CLIPS_KEY, String(merged));
+    window.dispatchEvent(new CustomEvent(GUEST_CLIP_EVENT, { detail: merged }));
+  } catch {
+    /* ignore */
+  }
+  return merged;
+}
+
 export function isGateDismissed(): boolean {
   if (typeof window === "undefined") return false;
   return localStorage.getItem(DISMISSED_KEY) === "1";

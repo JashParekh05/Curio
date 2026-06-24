@@ -1,168 +1,246 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
-import { getUserProfile } from "@/lib/api";
+import { getUserProfile, setUserInterests } from "@/lib/api";
 import { hasSeenIntro } from "@/lib/intro";
 import LegalFooter from "@/components/LegalFooter";
+import { Button } from "@/components/pop/Button";
+import { Input } from "@/components/pop/Input";
 
-const SUGGESTIONS = [
-  "I want to learn about binary trees",
-  "Teach me cell biology from scratch",
-  "Teach me about World War 2",
-  "I need to understand calculus derivatives",
+// Passive-first home (Friendly Pop). The product is the interest-learning feed:
+// you scroll, it picks up what you love from signals (watch time, 🔥/✓, skips)
+// and serves the best auto-curated clips. The active path/quiz flow is parked
+// (its files remain, just unlinked). Optional interest seeds warm the cold start.
+const INTERESTS = [
+  "Coding",
+  "AI",
+  "Math",
+  "Physics",
+  "Biology",
+  "Chemistry",
+  "Space",
+  "History",
+  "Geography",
+  "Economics",
+  "Finance",
+  "Psychology",
+  "Philosophy",
+  "Art",
+  "Music",
+  "Writing",
+  "Design",
+  "Health",
 ];
-
-// Rotating accent colors for the suggestion blocks.
-const CHIP_COLORS = ["bg-accent-yellow", "bg-accent-cyan", "bg-accent-lime", "bg-accent-pink"];
 
 export default function Home() {
   const router = useRouter();
-  const { user, session, loading, signOut, isGuest, isAuthenticated } = useAuth();
-  const [query, setQuery] = useState("");
+  const { user, session, loading, isAuthenticated, isGuest, anonFailed, retryGuest, signOut } = useAuth();
+  const [seeding, setSeeding] = useState(false);
+  const [customTopic, setCustomTopic] = useState("");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     if (!user || !session) return;
-    // The intro/demo carousel is the very first thing a new visitor sees —
-    // gate on it before anything else (onboarding) so it can't be skipped past
-    // by a faster-resolving redirect.
     if (!hasSeenIntro()) {
       router.replace("/welcome");
       return;
     }
+    // The Home tab links to /?home=1 to view this launcher; a bare "/" (the app
+    // opening) drops a ready user straight into the Discover feed (feed-first).
+    const forceLauncher =
+      typeof window !== "undefined" &&
+      new URLSearchParams(window.location.search).get("home") === "1";
     if (isAuthenticated) {
-      getUserProfile(user.id, session.access_token).then((p) => {
-        if (!p.onboarding_complete) router.replace("/onboarding");
-      }).catch(() => {});
+      getUserProfile(user.id, session.access_token)
+        .then((p) => {
+          if (!p.onboarding_complete) router.replace("/onboarding");
+          else if (!forceLauncher) router.replace("/discover");
+        })
+        .catch(() => {});
+    } else if (!forceLauncher) {
+      // guest, intro already seen → open straight into the feed
+      router.replace("/discover");
     }
   }, [user, session, isAuthenticated]);
 
-  // Entry point into the Adaptive Learning Game. The launcher no longer plans a
-  // path or renders a placement/plan overview here — it routes the learner into
-  // the `/play` game route, carrying the typed topic so the game can start the
-  // probe on it.
-  function startQuest(q: string) {
-    const trimmed = q.trim();
-    if (!trimmed) return;
-    router.push(`/play?topic=${encodeURIComponent(trimmed)}`);
+  function toggleTopic(t: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(t)) next.delete(t);
+      else next.add(t);
+      return next;
+    });
+  }
+
+  async function startFeed(seeds: string[] = []) {
+    if (seeding) return;
+    // Optional cold-start seeds: nudge the interest vector before the feed loads.
+    if (seeds.length && user && session) {
+      setSeeding(true);
+      try {
+        await setUserInterests(user.id, seeds, session.access_token);
+      } catch {
+        /* non-blocking — the feed still learns from scroll signals */
+      }
+    }
+    router.push("/discover");
   }
 
   if (loading) return null;
 
   if (!user) {
     return (
-      <main className="min-h-screen bg-paper text-ink flex flex-col items-center justify-center px-4 gap-6">
-        <h1 className="text-6xl font-black tracking-tight">
-          Curio<span className="text-accent-pink">.</span>
+      <main className="min-h-screen bg-canvas text-on-surface flex flex-col items-center justify-center px-6 gap-6">
+        <h1 className="font-display text-5xl font-extrabold tracking-tight">
+          Curio<span className="text-primary">.</span>
         </h1>
-        <p className="text-ink/70 text-sm text-center font-medium">Sign in to start learning.</p>
-        <button
-          onClick={() => router.push("/login")}
-          className="brutal-btn bg-accent-yellow text-ink px-8 py-3 text-lg"
-        >
-          Sign in
-        </button>
+        {anonFailed ? (
+          <>
+            <p className="text-on-surface-muted text-center max-w-xs">
+              We couldn&apos;t start a session. Check your connection and try again.
+            </p>
+            <Button size="lg" onClick={() => retryGuest()}>
+              Retry
+            </Button>
+            <Button variant="soft" size="lg" onClick={() => router.push("/login")}>
+              Sign in instead
+            </Button>
+          </>
+        ) : (
+          <>
+            <p className="text-on-surface-muted text-center max-w-xs">
+              A feed that learns what you love, and teaches it to you, one clip at a time.
+            </p>
+            <Button size="lg" onClick={() => router.push("/login")}>
+              Get started
+            </Button>
+          </>
+        )}
         <LegalFooter />
       </main>
     );
   }
 
   return (
-    <main className="min-h-screen bg-paper text-ink flex flex-col items-center px-4 py-10">
-      <div className="w-full max-w-xl space-y-7">
-        {/* Header */}
-        <div className="flex items-end justify-between">
-          <div>
-            <h1 className="text-5xl font-black tracking-tight leading-none">
-              Curio<span className="text-accent-pink">.</span>
-            </h1>
-            <div className="mt-2 inline-block bg-accent-lime brutal px-2 py-0.5 text-xs font-bold">
-              {isGuest ? "GUEST" : user.email}
-            </div>
-          </div>
+    <main className="min-h-screen bg-canvas text-on-surface flex flex-col items-center px-6 pt-10 pb-28">
+      <div className="w-full max-w-md flex flex-col gap-6">
+        {/* Top bar */}
+        <div className="flex items-center justify-between">
+          <h1 className="font-display text-2xl font-extrabold tracking-tight">
+            Curio<span className="text-primary">.</span>
+          </h1>
           {isGuest ? (
-            <div className="flex items-center gap-3">
-              <button
-                onClick={() => router.push("/welcome")}
-                className="text-ink/50 hover:text-ink text-xs font-bold transition"
-              >
-                How it works
-              </button>
-              <button
-                onClick={() => router.push("/login")}
-                className="brutal-btn bg-accent-cyan text-ink text-sm px-3 py-2"
-              >
-                Save progress
-              </button>
-            </div>
+            <Button variant="ghost" size="sm" onClick={() => router.push("/login")}>
+              Save progress
+            </Button>
           ) : (
-            <div className="flex items-center gap-3">
-              <button
-                onClick={() => router.push("/welcome")}
-                className="text-ink/50 hover:text-ink text-xs font-bold transition"
-              >
-                How it works
-              </button>
-              <button
-                onClick={signOut}
-                className="brutal-btn bg-white text-ink text-sm px-3 py-2"
-              >
-                Sign out
-              </button>
-            </div>
+            <Button variant="ghost" size="sm" onClick={signOut}>
+              Sign out
+            </Button>
           )}
         </div>
 
-        <div className="space-y-3">
-          <p className="text-3xl font-black leading-tight">What do you want to learn today?</p>
-          <div className="flex gap-3">
-            <input
-              className="brutal flex-1 bg-white px-4 py-3 text-ink placeholder-ink/40 focus:outline-none focus:shadow-brutal font-medium"
-              placeholder="e.g. hashmaps and dynamic programming"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && startQuest(query)}
+        {/* Hero */}
+        <div className="mt-6">
+          <h2 className="font-display text-3xl font-extrabold leading-tight">What do you want to do?</h2>
+          <p className="text-on-surface-muted mt-1.5">Three ways to learn. Pick your mode.</p>
+        </div>
+
+        {/* Three modes */}
+        <div className="flex flex-col gap-3">
+          <button
+            onClick={() => startFeed(Array.from(selected))}
+            disabled={seeding}
+            className="group text-left bg-surface rounded-card border border-outline shadow-elev-1 px-5 py-4 transition duration-base hover:shadow-elev-2 hover:-translate-y-0.5 disabled:opacity-50 motion-reduce:transform-none"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-display text-lg font-extrabold">Discover</span>
+              <span className="text-[10px] font-bold uppercase tracking-wide bg-primary text-on-primary px-2 py-0.5 rounded-pill">For You</span>
+            </div>
+            <p className="text-on-surface-muted text-sm mt-1">
+              {seeding ? "Warming up…" : "Scroll truly random clips. The feed learns what you love."}
+            </p>
+          </button>
+
+          <button
+            onClick={() => router.push("/learn")}
+            className="group text-left bg-surface rounded-card border border-outline shadow-elev-1 px-5 py-4 transition duration-base hover:shadow-elev-2 hover:-translate-y-0.5 motion-reduce:transform-none"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-display text-lg font-extrabold">Structured Learn</span>
+              <span className="text-[10px] font-bold uppercase tracking-wide bg-secondary text-on-secondary px-2 py-0.5 rounded-pill">Quizzes</span>
+            </div>
+            <p className="text-on-surface-muted text-sm mt-1">Pick a topic → a guided path with quick quiz check-ins.</p>
+          </button>
+
+          <button
+            onClick={() => router.push("/learn?mode=basic")}
+            className="group text-left bg-surface rounded-card border border-outline shadow-elev-1 px-5 py-4 transition duration-base hover:shadow-elev-2 hover:-translate-y-0.5 motion-reduce:transform-none"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-display text-lg font-extrabold">Basic Learn</span>
+              <span className="text-[10px] font-bold uppercase tracking-wide bg-surface-alt text-on-surface border border-outline px-2 py-0.5 rounded-pill">Videos</span>
+            </div>
+            <p className="text-on-surface-muted text-sm mt-1">Pick a topic → just the best clips, structured, no questions.</p>
+          </button>
+        </div>
+
+        {/* Optional cold-start seeds for Discover — pick as many as you like */}
+        <div className="flex flex-col gap-2">
+          <p className="text-on-surface-muted text-xs font-semibold uppercase tracking-wide">
+            Warm your Discover feed (optional)
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {[...INTERESTS, ...Array.from(selected).filter((t) => !INTERESTS.includes(t))].map((i) => {
+              const on = selected.has(i);
+              return (
+                <button
+                  key={i}
+                  onClick={() => toggleTopic(i)}
+                  disabled={seeding}
+                  aria-pressed={on}
+                  className={`rounded-pill text-sm px-3.5 py-2 border transition duration-base disabled:opacity-50 ${
+                    on
+                      ? "bg-primary text-on-primary border-primary shadow-elev-1"
+                      : "bg-surface-alt text-on-surface border-outline hover:brightness-95"
+                  }`}
+                >
+                  {i}
+                </button>
+              );
+            })}
+          </div>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              const t = customTopic.trim();
+              if (!t) return;
+              setSelected((prev) => new Set(prev).add(t));
+              setCustomTopic("");
+            }}
+            className="flex gap-2 pt-1"
+          >
+            <Input
+              value={customTopic}
+              onChange={(e) => setCustomTopic(e.target.value)}
+              placeholder="Add your own topic…"
+              disabled={seeding}
+              className="flex-1"
             />
-            <button
-              onClick={() => startQuest(query)}
-              disabled={!query.trim()}
-              className="brutal-btn bg-accent-yellow text-ink px-6 py-3 disabled:opacity-40"
-            >
-              Go
-            </button>
-          </div>
+            <Button type="submit" variant="soft" disabled={seeding || !customTopic.trim()}>
+              Add
+            </Button>
+          </form>
+          {selected.size > 0 && (
+            <Button size="lg" onClick={() => startFeed(Array.from(selected))} disabled={seeding} className="mt-1">
+              {seeding
+                ? "Warming up…"
+                : `Start your feed with ${selected.size} topic${selected.size === 1 ? "" : "s"} →`}
+            </Button>
+          )}
         </div>
-
-        <div className="space-y-2">
-          <p className="text-ink/60 text-xs font-bold uppercase tracking-wide">Try</p>
-          <div className="grid grid-cols-1 gap-2">
-            {SUGGESTIONS.map((s, i) => (
-              <button
-                key={s}
-                onClick={() => startQuest(s)}
-                className={`brutal-btn ${CHIP_COLORS[i % CHIP_COLORS.length]} text-ink text-left text-sm px-3 py-2.5`}
-              >
-                {s}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Secondary entry: just-browse the Discover feed. Kept visually
-            quiet so it never competes with the primary search action. */}
-        <div className="flex items-center gap-3 pt-1">
-          <div className="flex-1 h-[3px] bg-ink/15" />
-          <span className="text-ink/40 text-xs font-bold uppercase tracking-wide">or</span>
-          <div className="flex-1 h-[3px] bg-ink/15" />
-        </div>
-        <button
-          onClick={() => router.push("/discover")}
-          className="brutal-btn w-full bg-white text-ink py-3 text-sm flex items-center justify-center gap-2"
-        >
-          Surprise me
-          <span className="font-black">{">"}</span>
-        </button>
       </div>
       <LegalFooter />
     </main>

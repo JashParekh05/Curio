@@ -4,6 +4,8 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/auth-context";
+import { Button } from "@/components/pop/Button";
+import { Input } from "@/components/pop/Input";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -14,7 +16,7 @@ export default function LoginPage() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
 
-  // Redirect only real accounts — a guest always has a (anonymous) user, so
+  // Redirect only real accounts — a guest always has an (anonymous) user, so
   // gating on `isAuthenticated` lets guests reach this page to sign up / sign in.
   // Onboarding routing for new accounts is handled by the home page.
   useEffect(() => {
@@ -34,69 +36,83 @@ export default function LoginPage() {
         const { error: err } = await upgradeAccount(trimmedEmail, password);
         setSubmitting(false);
         if (err) {
-          setError(/already|registered|exists/i.test(err)
-            ? "That email already has an account. Switch to Sign in below."
-            : err);
+          setError(
+            /already|registered|exists/i.test(err)
+              ? "That email already has an account. Switch to Sign in below."
+              : err,
+          );
           return;
         }
         // Auth-state flip redirects via the effect above.
       } else {
         const { data, error: err } = await supabase.auth.signUp({ email: trimmedEmail, password });
         setSubmitting(false);
-        if (err) { setError(err.message); return; }
+        if (err) {
+          setError(err.message);
+          return;
+        }
         if (!data.session) {
-          setError("Account created — check your email to confirm, then sign in.");
+          setError("Account created. Check your email to confirm, then sign in.");
           return;
         }
       }
     } else {
       const { error: err } = await supabase.auth.signInWithPassword({ email: trimmedEmail, password });
       setSubmitting(false);
-      if (err) { setError(err.message); return; }
+      if (err) {
+        setError(err.message);
+        return;
+      }
     }
   }
 
   if (loading) return null;
 
   return (
-    <main className="min-h-screen bg-paper text-ink flex flex-col items-center justify-center px-4">
+    <main className="min-h-screen bg-canvas text-on-surface flex flex-col items-center justify-center px-4">
       <div className="w-full max-w-sm space-y-8">
         <div className="text-center space-y-2">
-          <h1 className="text-5xl font-black tracking-tight">Curio<span className="text-accent-pink">.</span></h1>
-          <p className="text-ink/70 font-medium">{isSignUp ? "Create an account" : "Sign in to track your progress"}</p>
+          <h1 className="font-display text-5xl font-extrabold tracking-tight">
+            Curio<span className="text-primary">.</span>
+          </h1>
+          <p className="text-on-surface-muted font-medium">
+            {isSignUp ? "Create an account" : "Sign in to track your progress"}
+          </p>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          <input
+          <Input
             type="email"
             placeholder="you@example.com"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             disabled={submitting}
-            className="brutal w-full bg-white px-4 py-3 text-ink placeholder-ink/40 font-medium focus:outline-none focus:shadow-brutal"
             autoFocus
           />
-          <input
+          <Input
             type="password"
             placeholder="Password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             disabled={submitting}
-            className="brutal w-full bg-white px-4 py-3 text-ink placeholder-ink/40 font-medium focus:outline-none focus:shadow-brutal"
           />
-          <button
+          <Button
             type="submit"
+            size="lg"
             disabled={submitting || !email.trim() || !password}
-            className="brutal-btn w-full bg-accent-yellow text-ink py-3 text-lg disabled:opacity-40"
+            className="w-full"
           >
-            {submitting ? "..." : isSignUp ? "Create account" : "Sign in"}
-          </button>
-          {error && <div className="brutal bg-accent-pink text-white text-sm font-bold px-3 py-2 text-center">{error}</div>}
+            {submitting ? "…" : isSignUp ? "Create account" : "Sign in"}
+          </Button>
+          {error && <p className="text-danger text-sm font-medium text-center">{error}</p>}
         </form>
 
         <button
-          onClick={() => { setIsSignUp(!isSignUp); setError(""); }}
-          className="w-full text-ink/60 hover:text-ink text-sm font-bold transition text-center"
+          onClick={() => {
+            setIsSignUp(!isSignUp);
+            setError("");
+          }}
+          className="w-full text-on-surface-muted hover:text-on-surface text-sm font-medium transition text-center"
         >
           {isSignUp ? "Already have an account? Sign in" : "No account? Sign up"}
         </button>
