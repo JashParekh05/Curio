@@ -46,7 +46,7 @@ export default function UpgradeModal({
       if (mode === "signup" && /already|registered|exists/i.test(err)) {
         // Existing account — flip to sign-in right here (no trip to /login).
         setMode("signin");
-        setError("That email already has an account — sign in below.");
+        setError("That email already has an account. Sign in below.");
       } else if (mode === "signin") {
         setError("Couldn't sign in. Check your email and password.");
       } else {
@@ -72,7 +72,7 @@ export default function UpgradeModal({
     mode === "signin"
       ? "Sign in to your account."
       : blocking
-        ? "You've hit the free preview limit. Create a free account to keep watching — your progress carries over."
+        ? "You've hit the free preview limit. Create a free account to keep watching. Your progress carries over."
         : "Create a free account to keep your history across devices. Your progress carries over.";
 
   return (

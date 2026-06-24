@@ -29,7 +29,7 @@ const SLIDES: Slide[] = [
     tag: "WHAT IS THIS",
     tagColor: "bg-primary text-on-primary",
     title: "Learning, as a feed.",
-    body: "Curio turns any topic into a feed of short videos — like a scrolling app, but every clip teaches you something.",
+    body: "Curio turns any topic into a feed of short videos, like a scrolling app, but every clip teaches you something.",
   },
   {
     tag: "HOW IT WORKS",
@@ -72,9 +72,9 @@ export default function WelcomePage() {
 
   const installSteps =
     platform === "ios"
-      ? ["Tap the Share button in your browser bar", "Scroll down and tap \"Add to Home Screen\"", "Tap Add — Curio lands on your home screen"]
+      ? ["Tap the Share button in your browser bar", "Scroll down and tap \"Add to Home Screen\"", "Tap Add, and Curio lands on your home screen"]
       : platform === "android"
-      ? ["Tap the menu (three dots) in your browser", "Tap \"Add to Home screen\" or \"Install app\"", "Confirm — Curio lands on your home screen"]
+      ? ["Tap the menu (three dots) in your browser", "Tap \"Add to Home screen\" or \"Install app\"", "Confirm, and Curio lands on your home screen"]
       : ["Open Curio on your phone's browser", "iPhone: Share, then Add to Home Screen", "Android: Menu, then Add to Home screen"];
 
   return (

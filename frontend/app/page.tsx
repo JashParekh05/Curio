@@ -111,7 +111,7 @@ export default function Home() {
         ) : (
           <>
             <p className="text-on-surface-muted text-center max-w-xs">
-              A feed that learns what you love — and teaches it to you, one clip at a time.
+              A feed that learns what you love, and teaches it to you, one clip at a time.
             </p>
             <Button size="lg" onClick={() => router.push("/login")}>
               Get started
@@ -145,7 +145,7 @@ export default function Home() {
         {/* Hero */}
         <div className="mt-6">
           <h2 className="font-display text-3xl font-extrabold leading-tight">What do you want to do?</h2>
-          <p className="text-on-surface-muted mt-1.5">Three ways to learn — pick your mode.</p>
+          <p className="text-on-surface-muted mt-1.5">Three ways to learn. Pick your mode.</p>
         </div>
 
         {/* Three modes */}
@@ -160,7 +160,7 @@ export default function Home() {
               <span className="text-[10px] font-bold uppercase tracking-wide bg-primary text-on-primary px-2 py-0.5 rounded-pill">For You</span>
             </div>
             <p className="text-on-surface-muted text-sm mt-1">
-              {seeding ? "Warming up…" : "Scroll truly random clips — the feed learns what you love."}
+              {seeding ? "Warming up…" : "Scroll truly random clips. The feed learns what you love."}
             </p>
           </button>
 

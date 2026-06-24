@@ -52,7 +52,7 @@ export default function LoginPage() {
           return;
         }
         if (!data.session) {
-          setError("Account created — check your email to confirm, then sign in.");
+          setError("Account created. Check your email to confirm, then sign in.");
           return;
         }
       }

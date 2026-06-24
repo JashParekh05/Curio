@@ -111,14 +111,14 @@ function LearnContent() {
                     : "bg-secondary text-on-secondary"
                 }`}
               >
-                {basic ? "Basic — no quizzes" : "Structured — with quizzes"}
+                {basic ? "Basic, no quizzes" : "Structured, with quizzes"}
               </span>
               <h2 className="font-display text-3xl font-extrabold leading-tight">
                 {basic ? "Basic learn" : "Structured learn"}
               </h2>
               <p className="text-on-surface-muted mt-1.5">
                 {basic
-                  ? "Tell us what you want to learn. We build an ordered path and serve just the best clips — no questions."
+                  ? "Tell us what you want to learn. We build an ordered path and serve just the best clips, no questions."
                   : "Tell us what you want to learn. We build an ordered path with quick quiz check-ins along the way."}
               </p>
             </div>

@@ -535,7 +535,7 @@ function FeedContent() {
           Home
         </button>
         <p className="font-display text-3xl font-extrabold text-center">No clips found</p>
-        <p className="text-on-surface-muted text-sm text-center">Try a different topic — we may not have content for this one yet.</p>
+        <p className="text-on-surface-muted text-sm text-center">Try a different topic. We may not have content for this one yet.</p>
         <button
           onClick={() => router.push("/")}
           className="rounded-pill bg-primary text-on-primary px-6 py-3 text-sm font-semibold shadow-elev-1 transition hover:brightness-[1.03]"
