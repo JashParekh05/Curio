@@ -3,7 +3,7 @@ import random
 import logging
 
 from app.models.schemas import Clip
-from app.services.feed_scoring import _get_clip_population_stats, _compute_scores, _spread_by_source, _diversify_by_topic, DISCOVER_WEIGHTS
+from app.services.feed_scoring import _get_clip_population_stats, _compute_scores, _spread_by_source, _diversify_by_topic, DISCOVER_WEIGHTS, ENGAGEMENT_WEIGHTS
 from app.services.arc_unifier import CanonicalArc
 from app.services.arc_unifier_store import load_canonical_arc
 from app.services.clip_ordering import order_clips_by_arc
@@ -12,10 +12,13 @@ logger = logging.getLogger(__name__)
 
 _DISCOVER_COLS = "id,topic_slug,title,description,video_url,thumbnail_url,duration_seconds,source_url,source_platform,hook_score,created_at,embedding"
 
-# Fraction of the discover feed reserved for exploration: off-taste clips sampled
-# from the lower-ranked pool so personalization never collapses into a one-topic
-# echo chamber (TikTok injects exploration the same way).
-_EXPLORE_FRACTION = 0.15
+# Fraction of the Discover feed reserved for "your content" — clips ranked by
+# the personalized (taste + interest) score. The remaining ~70% is broad
+# engaging discovery ranked by hook quality + cross-user completion (see
+# ENGAGEMENT_WEIGHTS), so Discover feels like a TikTok For-You page (mostly
+# fresh/varied content "from everywhere") instead of a single-taste echo
+# chamber. This 70% broad pool subsumes the old explicit exploration carve-out.
+_PERSONALIZED_FRACTION = 0.30
 
 
 def _fetch_clips_for_slug(
@@ -140,57 +143,99 @@ def _fetch_discover_clips(
     interest_vector: dict[str, float] | None = None,
     taste_vector: list[float] | None = None,
 ) -> list[Clip]:
-    relevant_limit = int(limit * 0.6)
+    # --- 70 / 30 composition -------------------------------------------------
+    # Build ONE broad candidate pool, rank it TWO ways, and merge:
+    #   * ~70% "engaging discovery" — ranked by ENGAGEMENT (hook quality +
+    #     cross-user completion + recency), NOT taste-bound, so the feed is full
+    #     of high-hook, widely-watched, freshly-generated clips "from everywhere"
+    #     (the TikTok For-You feel). Fresh content is biased toward trusted
+    #     high-production channels at ingestion (_channel_bonus), so this pool
+    #     naturally surfaces Crash Course / Veritasium / OverSimplified-style hits.
+    #   * ~30% "your content" — the same pool ranked by the PERSONALIZED score
+    #     (taste + interest), guaranteeing taste matches a reserved slice.
+    # Candidates are drawn relevant-topics-first (2:1 over broad), so a NEW user
+    # whose relevant_slugs come straight from onboarding (grade + interests ->
+    # e.g. high_school history -> WW2) gets a feed anchored to those topics,
+    # while an established user gets broad serendipity. The library IS the cache:
+    # we serve already-stored clips here and only TOP UP new ones via the bounded
+    # background task, so "fresh" never costs a per-request generation.
+    pool: list[Clip] = []
+    added: set[str] = set()
 
-    clips: list[Clip] = []
-
-    # Relevant clips first
-    for slug in relevant_slugs[:5]:
+    def _collect(slug: str, per_slug: int) -> None:
         try:
-            result = db.table("clips").select(_DISCOVER_COLS).eq("topic_slug", slug).limit(6).execute()
+            result = db.table("clips").select(_DISCOVER_COLS).eq("topic_slug", slug).limit(per_slug).execute()
         except Exception as e:
             logger.warning(f"[feed] Failed to fetch discover clips for slug={slug}: {e}")
-            continue
+            return
         for row in result.data:
-            if row["id"] not in seen_ids and len(clips) < relevant_limit:
-                row.setdefault("hook_score", 0.5)
-                clips.append(Clip(**row))
+            if row["id"] in seen_ids or row["id"] in added:
+                continue
+            row.setdefault("hook_score", 0.5)
+            pool.append(Clip(**row))
+            added.add(row["id"])
 
-    # Diversity fill from other slugs
+    for slug in relevant_slugs[:8]:        # relevant/onboarding topics first
+        _collect(slug, 6)
     other_slugs = [s for s in all_slugs if s not in relevant_slugs]
     random.shuffle(other_slugs)
-    for slug in other_slugs[:8]:
-        try:
-            result = db.table("clips").select(_DISCOVER_COLS).eq("topic_slug", slug).limit(3).execute()
-        except Exception as e:
-            logger.warning(f"[feed] Failed to fetch discover clips for slug={slug}: {e}")
-            continue
-        for row in result.data:
-            if row["id"] not in seen_ids and len(clips) < limit:
-                row.setdefault("hook_score", 0.5)
-                clips.append(Clip(**row))
+    for slug in other_slugs[:8]:           # broad serendipity ("from everywhere")
+        _collect(slug, 4)
 
-    clip_ids = [c.id for c in clips]
-    pop_stats = _get_clip_population_stats(db, clip_ids)
-    clips = _compute_scores(clips, pop_stats, None, interest_vector=interest_vector,
-                            taste_vector=taste_vector, weights=DISCOVER_WEIGHTS)
-    # Order by the personalized score (a prior random shuffle here discarded it,
-    # so discover was only personalized at topic-selection, not ordering).
-    # Source-spread the top `limit` to avoid clumping clips from one video.
-    clips = sorted(clips, key=lambda c: c.final_score or 0.0, reverse=True)
-    # Exploration (anti-filter-bubble): reserve a slice of the feed for off-taste
-    # clips sampled from the lower-ranked pool, so a strong taste never collapses
-    # the feed into a single-topic echo chamber.
-    explore_n = int(round(limit * _EXPLORE_FRACTION))
-    top_n = max(0, limit - explore_n)
-    selected = clips[:top_n]
-    rest = clips[top_n:]
-    if rest and explore_n > 0:
-        selected = selected + random.sample(rest, min(explore_n, len(rest)))
-    # Re-sort (exploration picks were appended out of score order), then
-    # diversify by topic so the feed never clumps many same-topic clips in a row
-    # (TikTok's "no two in a row from the same creator/sound", applied to topic).
-    # This is the ordering fix for the "5 westward-expansion clips in a row"
-    # clumping; source-spread is subsumed since adjacent clips differ in topic.
-    selected.sort(key=lambda c: c.final_score or 0.0, reverse=True)
-    return _diversify_by_topic(selected[:limit])
+    if not pool:
+        return []
+
+    pop_stats = _get_clip_population_stats(db, [c.id for c in pool])
+
+    # Personalized ranking (taste/interest-first) — captured BEFORE the second
+    # scoring pass overwrites final_score on the shared clip objects.
+    _compute_scores(pool, pop_stats, None, interest_vector=interest_vector,
+                    taste_vector=taste_vector, weights=DISCOVER_WEIGHTS)
+    personalized_rank = sorted(pool, key=lambda c: c.final_score or 0.0, reverse=True)
+
+    # Engagement ranking (hook + completion + recency, broad — NOT taste-bound).
+    _compute_scores(pool, pop_stats, None, interest_vector=interest_vector,
+                    taste_vector=taste_vector, weights=ENGAGEMENT_WEIGHTS)
+    engaging_rank = sorted(pool, key=lambda c: c.final_score or 0.0, reverse=True)
+
+    # Reserve the personalized 30% (best taste matches), fill the rest from the
+    # engagement ranking (disjoint), then interleave so "your content" is
+    # sprinkled through the feed instead of front- or back-loaded.
+    personalized_n = min(len(pool), max(1, round(limit * _PERSONALIZED_FRACTION)))
+    personalized_pick = personalized_rank[:personalized_n]
+    picked = {c.id for c in personalized_pick}
+    engaging_pick = [c for c in engaging_rank if c.id not in picked][: max(0, limit - len(personalized_pick))]
+
+    merged = _ratio_interleave(engaging_pick, personalized_pick)
+    # Diversify by topic so the feed never clumps same-topic clips in a row
+    # (TikTok's "no two in a row", applied to topic). Preserves the 70/30 counts.
+    return _diversify_by_topic(merged[:limit])
+
+
+def _ratio_interleave(primary: list[Clip], secondary: list[Clip]) -> list[Clip]:
+    """Evenly merge a ``primary`` (engaging, ~70%) and ``secondary``
+    (personalized, ~30%) ranked list, preserving each list's internal order and
+    total counts while spreading the smaller list across the larger so
+    personalization is sprinkled throughout rather than blocked at one end.
+
+    Placement is even by construction: at each output position we place a
+    ``secondary`` item iff fewer have been placed than the proportional target
+    ``round((pos + 1) * len(secondary) / total)``, else a ``primary`` item. The
+    leading slot goes to ``primary`` (Discover is engagement-first).
+    """
+    if not primary:
+        return list(secondary)
+    if not secondary:
+        return list(primary)
+    total = len(primary) + len(secondary)
+    out: list[Clip] = []
+    pi = si = 0
+    for pos in range(total):
+        target_si = round((pos + 1) * len(secondary) / total)
+        if si < target_si and si < len(secondary):
+            out.append(secondary[si]); si += 1
+        elif pi < len(primary):
+            out.append(primary[pi]); pi += 1
+        else:
+            out.append(secondary[si]); si += 1
+    return out

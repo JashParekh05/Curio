@@ -25,6 +25,17 @@ DISCOVER_WEIGHTS = {
     "hook": 0.15, "population": 0.10, "duration": 0.0,
     "recency": 0.05, "interest": 0.30, "semantic": 0.40,
 }
+# Engagement-first profile for the broad "discovery" 70% of the Discover feed.
+# NOT taste-bound (semantic 0): ranks by hook quality + cross-user completion
+# rate, with a recency nudge so freshly-generated clips surface. This is what
+# makes Discover feel like a For-You page of high-hook, widely-watched,
+# production-quality clips "from everywhere" rather than a taste echo chamber.
+# Sums to 1.0. Pairs with DISCOVER_WEIGHTS (the personalized 30%) in
+# feed_retrieval._fetch_discover_clips.
+ENGAGEMENT_WEIGHTS = {
+    "hook": 0.45, "population": 0.35, "duration": 0.0,
+    "recency": 0.15, "interest": 0.05, "semantic": 0.0,
+}
 
 
 def _parse_vector(v) -> list[float] | None:

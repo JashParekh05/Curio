@@ -84,6 +84,11 @@ TRUSTED_CHANNELS = (
     "minutephysics", "teded", "vsauce",
     # Economics
     "marginalrevolution",
+    # General edutainment / history / current events (high-production, broad
+    # appeal — the "fun hook" channels that anchor the engaging 70% of Discover)
+    "oversimplified", "johnnyharris", "wendoverproductions", "halfasinteresting",
+    "reallifelore", "kingsandgenerals", "historymatters", "economicsexplained",
+    "tierzoo", "practicalengineering",
 )
 
 CHANNEL_BONUS = 0.15
