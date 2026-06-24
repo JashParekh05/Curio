@@ -184,14 +184,20 @@ def _seed_topics_bg(slugs: list[str], difficulty: str) -> None:
 
 # Rotated search angles. Appending one to a topic name makes the YouTube search
 # a CACHE MISS (a new query string) so it surfaces fresh videos instead of the
-# already-cached set — the core of "feels fresh" without yt-dlp.
-_FRESH_ANGLES = ["explained", "examples", "intuition", "deep dive", "in practice", "key ideas"]
+# already-cached set — the core of "feels fresh" without yt-dlp. A wider pool =
+# more variety across loads; several lean toward the fun/engaging hook style
+# (crash course, visualized, real world) so the fresh pulls feel less dry.
+_FRESH_ANGLES = [
+    "explained", "examples", "intuition", "deep dive", "in practice", "key ideas",
+    "for beginners", "real world", "common mistakes", "step by step",
+    "visualized", "crash course",
+]
 
 
 def select_topup_topics(
     relevant_slugs: list[str],
     interest_vector: dict[str, float] | None = None,
-    max_topics: int = 2,
+    max_topics: int = 4,
 ) -> list[str]:
     """Signal-driven choice of which topics to generate FRESH clips for.
 
@@ -213,26 +219,30 @@ def select_topup_topics(
     return out
 
 
-def _topup_discover_fresh(slugs: list[str], difficulty: str) -> None:
-    """Background: pull FRESH clips for taste-selected topics via a rotated
-    search angle (cache MISS -> new videos) and ADD them (clear_existing=False).
+def _topup_discover_fresh(slugs: list[str], difficulty: str, angles_per_topic: int = 2) -> None:
+    """Background: pull FRESH clips for taste-selected topics via rotated search
+    angles (cache MISS -> new videos) and ADD them (clear_existing=False).
 
-    Rides the existing fail-closed multi-project quota pool, so it fails over
-    across YT_PROJECTS keys and stops cleanly when the day's budget is spent.
-    Best-effort: a per-topic failure never affects the others or the request.
+    Each topic gets ``angles_per_topic`` DISTINCT angles -> that many cache-miss
+    searches, so a single topic surfaces several different fresh video sets per
+    load (more aggressive freshness). Rides the existing fail-closed
+    multi-project quota pool, so it fails over across YT_PROJECTS keys and stops
+    cleanly when the day's budget is spent. Best-effort: a per-search failure
+    never affects the other searches, the other topics, or the request.
     """
     from app.agents.pipeline_agent import run_pipeline
+    n = max(1, min(angles_per_topic, len(_FRESH_ANGLES)))
     for slug in slugs:
         name = slug.replace("-", " ").title()
-        angle = random.choice(_FRESH_ANGLES)
-        try:
-            stored = run_pipeline(
-                slug,
-                name,
-                search_query=f"{name} {angle}",
-                section_index=0,
-                clear_existing=False,
-            )
-            logger.info(f"[feed] fresh top-up topic={slug} angle={angle!r} stored={stored}")
-        except Exception as exc:
-            logger.warning(f"[feed] fresh top-up failed for {slug}: {exc}")
+        for angle in random.sample(_FRESH_ANGLES, n):  # distinct angles per topic
+            try:
+                stored = run_pipeline(
+                    slug,
+                    name,
+                    search_query=f"{name} {angle}",
+                    section_index=0,
+                    clear_existing=False,
+                )
+                logger.info(f"[feed] fresh top-up topic={slug} angle={angle!r} stored={stored}")
+            except Exception as exc:
+                logger.warning(f"[feed] fresh top-up failed for {slug} angle={angle!r}: {exc}")

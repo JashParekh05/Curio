@@ -694,11 +694,13 @@ async def get_discover_feed(user_id: str, background_tasks: BackgroundTasks, lim
     # searches, so Discover keeps feeling fresh instead of recycling the library.
     # Gated on interests (like the seed top-up) so we never spend quota without a
     # signal; WHICH topics is taste-ranked, re-targeting as the vectors move.
+    # Aggressiveness knobs: 4 topics x 2 distinct angles = up to 8 fresh searches
+    # per load (quota-bounded; fails closed when the day's pool is spent).
     if interests:
-        topup_slugs = select_topup_topics(relevant_slugs, user_interest_vector)
+        topup_slugs = select_topup_topics(relevant_slugs, user_interest_vector, max_topics=4)
         if topup_slugs:
             background_tasks.add_task(
-                _topup_discover_fresh, topup_slugs, _GRADE_DIFFICULTY.get(grade_level, "intermediate")
+                _topup_discover_fresh, topup_slugs, _GRADE_DIFFICULTY.get(grade_level, "intermediate"), 2
             )
 
     # Level-aware ranking (stage 2): the user's exact Content_Level leads, with
