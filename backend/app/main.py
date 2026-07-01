@@ -22,7 +22,10 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # CORS — read from env so staging/prod frontends can be configured without code changes
-_raw_origins = os.environ.get("ALLOWED_ORIGINS", "https://curio-eta.vercel.app")
+_raw_origins = os.environ.get(
+    "ALLOWED_ORIGINS",
+    "https://www.curiolearn.info,https://curiolearn.info,https://curio-eta.vercel.app",
+)
 _extra_origins = [o.strip() for o in _raw_origins.split(",") if o.strip()]
 
 app.add_middleware(
